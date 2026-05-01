@@ -19,6 +19,16 @@ from dotenv import load_dotenv
 from streamlit_calendar import calendar
 
 load_dotenv()
+
+# Streamlit Cloud injects secrets through st.secrets, not .env. Copy them
+# into os.environ so the rest of the file works unchanged in both worlds.
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str) and _k not in os.environ:
+            os.environ[_k] = _v
+except Exception:
+    pass
+
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 LOGO_PATH = Path(__file__).parent / "assets" / "masters_union_logo.png"
