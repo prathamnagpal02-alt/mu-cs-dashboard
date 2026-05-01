@@ -1394,72 +1394,68 @@ def render_header():
             st.image(str(LOGO_PATH), width=130)
 
 
-def _clear_date_widget_state():
-    """Wipe every per-scope date_input widget state so the next render
-    re-initialises from session_state.range_value. Without this, the widget
-    keys survive a preset click and the OLD date keeps overwriting the new
-    one on the next rerun."""
-    for k in list(st.session_state.keys()):
-        if k.startswith("dr_from_") or k.startswith("dr_to_"):
-            del st.session_state[k]
-
-
 def select_date_range(scope: str = "global"):
-    """Returns (start_date, end_date). The `scope` suffix keeps widget keys
-    unique when called from multiple tabs; range_value is the single source
-    of truth that survives across tabs."""
+    """Date range with preset buttons (instant) + custom range inside a form
+    that only applies on Submit. Default is Last 7 days."""
     today = date.today()
-    default_start = date(today.year, today.month, 1)
 
+    # First-time default: Last 7 days (per MU brief, 2026-05-01).
     if "range_value" not in st.session_state:
-        st.session_state.range_value = (default_start, today)
+        st.session_state.range_value = (today - timedelta(days=7), today)
 
-    with st.container():
-        cols = st.columns([1.4, 1.4, 1.2, 1.2, 1.2, 1.2, 0.9])
+    cur_start, cur_end = st.session_state.range_value
+    is_active = lambda s, e: (cur_start == s and cur_end == e)
 
-        if cols[0].button("This month", use_container_width=True,
-                          key=f"qr_tm_{scope}"):
-            st.session_state.range_value = (default_start, today)
-            _clear_date_widget_state()
-            st.rerun()
-        if cols[1].button("Last 7 days", use_container_width=True,
-                          key=f"qr_7_{scope}"):
-            st.session_state.range_value = (today - timedelta(days=7), today)
-            _clear_date_widget_state()
-            st.rerun()
-        if cols[2].button("Last 30 days", use_container_width=True,
-                          key=f"qr_30_{scope}"):
-            st.session_state.range_value = (today - timedelta(days=30), today)
-            _clear_date_widget_state()
-            st.rerun()
-        if cols[3].button("YTD", use_container_width=True,
-                          key=f"qr_ytd_{scope}"):
-            st.session_state.range_value = (date(today.year, 1, 1), today)
-            _clear_date_widget_state()
-            st.rerun()
-
-        cur_start, cur_end = st.session_state.range_value
-        with cols[4]:
-            new_start = st.date_input(
-                "From", value=cur_start, format="DD/MM/YYYY",
-                label_visibility="collapsed", key=f"dr_from_{scope}",
-            )
-        with cols[5]:
-            new_end = st.date_input(
-                "To", value=cur_end, format="DD/MM/YYYY",
-                label_visibility="collapsed", key=f"dr_to_{scope}",
-            )
-        if cols[6].button("↻", use_container_width=True,
-                          key=f"qr_refresh_{scope}",
-                          help="Refresh data from the database"):
-            st.cache_data.clear()
+    # ---- Preset buttons (outside form so each click reruns instantly) ----
+    pcols = st.columns([1.2, 1.2, 1.2, 1.2, 0.8])
+    presets = [
+        ("Last 7 days", today - timedelta(days=7), today, "qr_7"),
+        ("This month",  date(today.year, today.month, 1), today, "qr_tm"),
+        ("Last 30 days", today - timedelta(days=30), today, "qr_30"),
+        ("YTD",          date(today.year, 1, 1), today, "qr_ytd"),
+    ]
+    for i, (label, ps, pe, key_root) in enumerate(presets):
+        active = is_active(ps, pe)
+        button_label = f"✓ {label}" if active else label
+        if pcols[i].button(
+            button_label,
+            key=f"{key_root}_{scope}",
+            use_container_width=True,
+            type="primary" if active else "secondary",
+        ):
+            st.session_state.range_value = (ps, pe)
             st.rerun()
 
-        if new_start > new_end:
-            new_start, new_end = new_end, new_start
+    if pcols[4].button("↻", key=f"qr_refresh_{scope}",
+                        use_container_width=True,
+                        help="Refresh data from the database"):
+        st.cache_data.clear()
+        st.rerun()
 
-        st.session_state.range_value = (new_start, new_end)
-        return new_start, new_end
+    # ---- Custom range, batched inside a form so Apply confirms ----
+    with st.form(key=f"date_form_{scope}", clear_on_submit=False, border=False):
+        fcols = st.columns([2, 2, 1])
+        draft_start = fcols[0].date_input(
+            "From", value=cur_start, format="DD/MM/YYYY",
+            label_visibility="collapsed",
+        )
+        draft_end = fcols[1].date_input(
+            "To", value=cur_end, format="DD/MM/YYYY",
+            label_visibility="collapsed",
+        )
+        applied = fcols[2].form_submit_button(
+            "Apply custom", type="primary", use_container_width=True,
+        )
+        if applied:
+            if draft_start > draft_end:
+                draft_start, draft_end = draft_end, draft_start
+            st.session_state.range_value = (draft_start, draft_end)
+            st.rerun()
+
+    st.caption(
+        f"Showing data from **{cur_start:%d %b %Y}** to **{cur_end:%d %b %Y}**."
+    )
+    return cur_start, cur_end
 
 
 def render_pod_card(pod_name: str, start_date: date, end_date: date,
