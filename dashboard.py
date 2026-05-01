@@ -4458,73 +4458,113 @@ def render_cross_pod_activity(start_date: date, end_date: date,
 
 
 def render_upcoming_shoots_overview():
-    """Mini calendar of the next 14 days of Coverage shoots, no tables."""
+    """Single 10-day calendar mixing Coverage shoots AND every production
+    pod's `Date of Shoot` entries. Always anchored to TODAY regardless of
+    the page-level date range — this is a here-and-now view."""
+    today = date.today()
+    horizon = today + timedelta(days=10)
+
+    events = []
+
+    # ---- Production pod shoots ----
+    for pod in PODS:
+        df = _prepare_pod_status(pod)
+        if df is None or df.empty:
+            continue
+        for _, row in df.iterrows():
+            d = row["data"]
+            shoot_date = parse_date(_first_filled_str(d, SHOOT_DATE_COLS))
+            if not shoot_date or not (today <= shoot_date <= horizon):
+                continue
+            subject = (d.get("Video Name") or "").strip() or "(unnamed)"
+            lead = (d.get("Lead") or d.get("POC in Charge") or d.get("POC in charge") or "").strip()
+            pod_lbl = pod_display(pod)
+            events.append({
+                "title": f"{pod_lbl} · {subject}",
+                "start": shoot_date.isoformat(),
+                "end": shoot_date.isoformat(),
+                "backgroundColor": colour_for(pod),
+                "borderColor": colour_for(pod),
+                "textColor": "#FFFFFF",
+                "extendedProps": {
+                    "Source": pod_lbl, "Lead": lead, "Subject": subject,
+                },
+            })
+
+    # ---- Coverage main shoot calendar ----
     cov = load_coverage_snapshot()
-    if cov.empty:
+    if not cov.empty:
+        cov = cov.copy()
+        cov["shoot_date"] = cov["data"].apply(lambda d: parse_date(d.get("Date")))
+        cov = cov[cov["shoot_date"].notna()]
+        cov_in_range = cov[(cov["shoot_date"] >= today) & (cov["shoot_date"] <= horizon)]
+        for _, row in cov_in_range.iterrows():
+            d = row["data"]
+            shoot_date = row["shoot_date"]
+            subject = (d.get("Shoot Subject") or "Untitled shoot").strip() or "Untitled shoot"
+            dept = (d.get("Department") or "").strip()
+            lead = (d.get("Shoot Lead") or "").strip()
+            crew = (d.get("who shot it") or "").strip()
+            t_from = parse_clock_time(d.get("Time (From)"))
+            t_till = parse_clock_time(d.get("Time (Till)"))
+            if t_from and t_till:
+                start_iso = datetime.combine(shoot_date, t_from).isoformat()
+                end_dt = datetime.combine(shoot_date, t_till)
+                if end_dt <= datetime.combine(shoot_date, t_from):
+                    end_dt += timedelta(days=1)
+                end_iso = end_dt.isoformat()
+            else:
+                start_iso = shoot_date.isoformat()
+                end_iso = shoot_date.isoformat()
+            dept_label = dept if dept else "(no dept)"
+            title = f"Coverage · {dept_label} · {subject}"
+            events.append({
+                "title": title,
+                "start": start_iso,
+                "end": end_iso,
+                "backgroundColor": MU_BLACK,
+                "borderColor": MU_BLACK,
+                "textColor": "#FFFFFF",
+                "extendedProps": {
+                    "Source": "Coverage", "Department": dept,
+                    "Lead": lead, "Crew": crew, "Subject": subject,
+                },
+            })
+
+    if not events:
         st.info(
-            "No Coverage snapshot loaded. Make sure the Coverage sheet is shared "
-            "with the service account and run `python snapshot_all.py`."
+            "No upcoming shoots in the next 10 days across any pod or the Coverage calendar."
         )
         return
 
-    today = date.today()
-    horizon = today + timedelta(days=14)
-    cov = cov.copy()
-    cov["shoot_date"] = cov["data"].apply(lambda d: parse_date(d.get("Date")))
-    cov = cov[cov["shoot_date"].notna()]
-    upcoming = cov[(cov["shoot_date"] >= today) & (cov["shoot_date"] <= horizon)]
+    # Source counts for the legend
+    pod_event_count = sum(1 for e in events if e["extendedProps"]["Source"] != "Coverage")
+    cov_event_count = sum(1 for e in events if e["extendedProps"]["Source"] == "Coverage")
 
-    if upcoming.empty:
-        st.info("No upcoming shoots in the next 14 days.")
-        return
-
-    events = []
-    for _, row in upcoming.iterrows():
-        d = row["data"]
-        shoot_date = row["shoot_date"]
-        subject = (d.get("Shoot Subject") or "Untitled shoot").strip() or "Untitled shoot"
-        dept = (d.get("Department") or "").strip()
-        lead = (d.get("Shoot Lead") or "").strip()
-        t_from = parse_clock_time(d.get("Time (From)"))
-        t_till = parse_clock_time(d.get("Time (Till)"))
-        if t_from and t_till:
-            start_iso = datetime.combine(shoot_date, t_from).isoformat()
-            end_dt = datetime.combine(shoot_date, t_till)
-            if end_dt <= datetime.combine(shoot_date, t_from):
-                end_dt += timedelta(days=1)
-            end_iso = end_dt.isoformat()
-        else:
-            start_iso = shoot_date.isoformat()
-            end_iso = shoot_date.isoformat()
-        dept_label = dept if dept else "(no dept)"
-        title = f"{dept_label} · {subject}"
-        colour = colour_for(dept) if dept else MU_GREY_3
-        events.append({
-            "title": title,
-            "start": start_iso,
-            "end": end_iso,
-            "backgroundColor": colour,
-            "borderColor": colour,
-            "textColor": "#FFFFFF",
-            "extendedProps": {
-                "Lead": lead, "Department": dept, "Subject": subject,
-            },
-        })
+    cols = st.columns(3)
+    cols[0].metric("Total shoots, next 10 days", len(events))
+    cols[1].metric("Production pod shoots", pod_event_count)
+    cols[2].metric("Coverage shoots", cov_event_count)
+    st.caption(
+        f"Window: **{today:%d %b %Y} → {horizon:%d %b %Y}**. "
+        "Coverage shoots in black, production pod shoots colour-coded by pod. "
+        "This window is anchored to today and ignores the page-level date filter."
+    )
 
     options = {
         "headerToolbar": {
             "left": "today prev,next",
             "center": "title",
-            "right": "dayGridMonth,listWeek",
+            "right": "dayGridMonth,listWeek,timeGridWeek",
         },
-        "initialView": "dayGridMonth",
+        "initialView": "listWeek",
         "initialDate": today.isoformat(),
         "editable": False,
-        "dayMaxEvents": 3,
-        "height": 520,
+        "dayMaxEvents": 4,
+        "height": 560,
     }
     try:
-        calendar(events=events, options=options, key="overview_upcoming_calendar")
+        calendar(events=events, options=options, key="overview_upcoming_calendar_v2")
     except Exception as e:
         st.error(f"Calendar widget failed: {type(e).__name__}: {e}")
 
