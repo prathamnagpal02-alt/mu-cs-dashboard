@@ -233,6 +233,12 @@ SHEET_LIBRARY = [
         "url": "https://docs.google.com/spreadsheets/d/1Tr4HPLouJsXRHtJDWBjsxKgLxX2StDI8Cb6f0Wyb2D0/edit",
         "owner": "Brand (Akash, Aim High India retainer)",
     },
+    {
+        "name": "Influencer Marketing",
+        "purpose": "Marquee creator campaigns, links, impressions, and spend.",
+        "url": "https://docs.google.com/spreadsheets/d/1RCMD8DHsIVBnwrIfl_2qgvt0LQZaUG2eoDFLwwuHano/edit",
+        "owner": "Khushi Nahar",
+    },
 ]
 
 
@@ -2820,15 +2826,20 @@ def render_overview_costing(start_date: date, end_date: date):
     grand_total = grand_salary + grand_expense
     grand_cpv = (grand_total / grand_shipped) if grand_shipped else None
 
-    # Top tiles
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total spend (all pods)", _money_compact(grand_total))
-    c2.metric(
-        "Salary share",
-        _money_compact(grand_salary) if salary_visible else "Click 👁️ in Finance"
-    )
-    c3.metric("Content expenses share", _money_compact(grand_expense))
-    c4.metric("Avg cost per video", _money_compact(grand_cpv) if grand_cpv else "—")
+    # Top tiles — salary tile only renders when the eye is on, otherwise
+    # we drop down to three tiles so nothing overflows.
+    if salary_visible:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total spend (all pods)", _money_compact(grand_total))
+        c2.metric("Salary share", _money_compact(grand_salary))
+        c3.metric("Content expenses share", _money_compact(grand_expense))
+        c4.metric("Avg cost per video", _money_compact(grand_cpv) if grand_cpv else "—")
+    else:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total content expenses", _money_compact(grand_expense))
+        c2.metric("Videos shipped", grand_shipped)
+        c3.metric("Cost per video (excl. salary)",
+                  _money_compact((grand_expense / grand_shipped) if grand_shipped else None) if grand_shipped else "—")
 
     st.caption(
         f"Spend window: {format_range(start_date, end_date)} "
@@ -3311,10 +3322,13 @@ def render_pod_headline(pod_name: str, df_in_range: pd.DataFrame,
 
     cost_per_video = (total_spend / shipped) if shipped else None
 
+    # Cost-per-view target (Das Paisa principle from MU's brief):
+    # short form (Instagram, YT Shorts) target = ₹0.10/view
+    # long form (YouTube long, podcast) target = ₹1/view
+    is_long_form_pod = pod_name.startswith("YT - ") and "Shorts" not in pod_name
+    cpv_target = 1.0 if is_long_form_pod else 0.10
+
     salary_visible = st.session_state.get("salary_visible", False)
-    spend_label = _money_compact(total_spend) if salary_visible else (
-        _money_compact(total_expense) if total_expense > 0 else "Click 👁️ in Finance to reveal"
-    )
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric(
@@ -3329,21 +3343,24 @@ def render_pod_headline(pod_name: str, df_in_range: pd.DataFrame,
         delta = f"{gap:+d} vs target"
     c2.metric(f"{final_status} this range", shipped, delta=delta,
               delta_color="normal" if (target is None or shipped >= target) else "inverse")
+    # Spend tile — never asks for the eye on the headline; expenses always shown.
     c3.metric(
-        "Spend",
-        spend_label,
-        help=("Salary share + content expenses. Salary is masked behind the eye "
-              "icon on the Finance tab.")
+        "Content expenses",
+        _money_compact(total_expense) if total_expense else "—",
+        help="Direct content expenses for this range (excludes salary unless eye toggle is on)."
     )
     c4.metric(
         "Cost per video",
         _money_compact(cost_per_video) if cost_per_video else "—",
-        help=f"Total spend ÷ {shipped} {final_status.lower()} videos in range."
+        help=(f"Total spend ÷ {shipped} {final_status.lower()} videos. "
+              + ("Includes salary." if salary_visible else "Excludes salary; toggle on Finance tab to include."))
     )
+    fmt_form = "long-form" if is_long_form_pod else "short-form"
     c5.metric(
-        "Cost per view",
-        "Pending YT/IG API",
-        help="Activates in Phase 5 once YouTube Data API and Meta Graph API are wired in."
+        "Target CPV",
+        f"₹{cpv_target:.2f} / view",
+        help=(f"Das Paisa principle: ₹0.10/view target for short form, ₹1.00/view for long form. "
+              f"This pod treated as {fmt_form}. Actual CPV pending YT/IG analytics integration.")
     )
 
 

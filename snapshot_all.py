@@ -40,6 +40,8 @@ SALARIES_SHEET_ID = "1eok2NGU7gzhM7sGraFcyeqO-AMyyQXzj4AxhV-bXUrw"
 AOP_SHEET_ID = "16tKPWj33VN1Y7PGRf1LqNyYHOw6gLIJErG3f6nfY5AU"
 NEWSLETTERS_SHEET_ID = "1HXFklF6_RJ3L_lSDe0AUr1xdxKQ-c9ngYvvUosyFI94"
 ORM_SHEET_ID = "1kBFoCe28vrkVqnaRyn3dqNxBs_KSZf8MuZcpVp_vAXE"
+INFLUENCER_SHEET_ID = "1RCMD8DHsIVBnwrIfl_2qgvt0LQZaUG2eoDFLwwuHano"
+PR_SHEET_ID = "1Tr4HPLouJsXRHtJDWBjsxKgLxX2StDI8Cb6f0Wyb2D0"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -84,6 +86,15 @@ AOP_TABS = [
 NEWSLETTERS_TABS = ["MU newsletters", "Swati NL", "Nandini NL"]
 
 ORM_TABS = ["Reddit", "Quora"]
+
+# Influencer Marketing — main campaign roll-up + planned tab. Per-campaign
+# tabs (WLDD x Rohit, etc.) can be added later if needed.
+INFLUENCER_TABS = ["2025 Collabs", "Planned"]
+
+# PR — pulling the most recent date-range tab makes most sense; for now
+# we pull the entire workbook is too noisy. Skipping in v1, MU will tell us
+# which tab to pull.
+PR_TABS = []  # placeholder
 
 INSERT_PAGE_SIZE = 500
 
@@ -258,6 +269,12 @@ def main():
     snapshot_supplementary_sheet(
         gc, ORM_SHEET_ID, "ORM", ORM_TABS,
     )
+
+    # --- Influencer Marketing ---
+    if INFLUENCER_TABS:
+        snapshot_supplementary_sheet(
+            gc, INFLUENCER_SHEET_ID, "Influencer Marketing", INFLUENCER_TABS,
+        )
 
     elapsed = (datetime.now() - start).total_seconds()
     print(f"\nDone. Total elapsed: {elapsed:.1f}s")

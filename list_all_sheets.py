@@ -60,6 +60,11 @@ SHEETS = [
         "id": "1Tr4HPLouJsXRHtJDWBjsxKgLxX2StDI8Cb6f0Wyb2D0",
         "purpose": "Press, publications, and tiered media coverage tracker.",
     },
+    {
+        "name": "Influencer Marketing",
+        "id": "1RCMD8DHsIVBnwrIfl_2qgvt0LQZaUG2eoDFLwwuHano",
+        "purpose": "Marquee creator campaigns, links, impressions, and spend tracker.",
+    },
 ]
 
 SCOPES = [
