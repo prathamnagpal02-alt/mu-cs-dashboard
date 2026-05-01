@@ -134,8 +134,7 @@ ORG = {
             "Influencer Marketing": {
                 "lead": "Khushi Nahar",
                 "headcount": 1,
-                "pods": [],
-                "note": "No data integration yet — creator campaigns through Monk-E, Finnet, YAAS.",
+                "pods": ["Creator Campaigns"],
             },
         },
     },
@@ -3532,6 +3531,8 @@ def render_pod_in_vertical(pod_name: str, start_date: date, end_date: date,
         render_pr_placeholder(start_date, end_date)
     elif pod_name == "Partnerships":
         render_partnerships_placeholder(start_date, end_date)
+    elif pod_name == "Creator Campaigns":
+        render_influencer_marketing(start_date, end_date)
     elif pod_name in PODS:
         render_pod_detail(pod_name, start_date, end_date)
     else:
@@ -3733,6 +3734,7 @@ def render_newsletters_placeholder(start_date: date, end_date: date):
     """Three sub-tabs: Paradox Weekly, Swati's Memo, Nandini's Newsletter."""
     st.markdown("### Newsletters")
     st.caption("Lead: **Ananya Dengri** (Brand). All three newsletters in one place.")
+    render_retainer_card("Newsletters", len(_months_in_range(start_date, end_date)))
 
     nl_tabs = st.tabs(["Paradox Weekly (PM)", "Swati's Memo", "Nandini's Newsletter"])
     with nl_tabs[0]:
@@ -3747,6 +3749,7 @@ def render_orm_placeholder(start_date: date, end_date: date):
     """Two sub-tabs: Reddit, Quora."""
     st.markdown("### ORM (Online Reputation Management)")
     st.caption("Lead: **Akash P K** (Brand) · Retainer: Inagiffy.")
+    render_retainer_card("ORM", len(_months_in_range(start_date, end_date)))
 
     orm_tabs = st.tabs(["Reddit", "Quora"])
 
@@ -3839,14 +3842,13 @@ def render_orm_placeholder(start_date: date, end_date: date):
 
 
 def render_pr_placeholder(start_date: date, end_date: date):
-    _placeholder_pod(
-        "PR (Public Relations)",
-        "Akash P K · Aim High India retainer (Brand)",
-        "Press, publications, and tiered media coverage. Divyam wants this "
-        "view to show **publications done per month, tiered**, once the PR "
-        "sheet is shared.\n\n"
-        "Next step: paste the PR sheet URL in the chat so I can add it to "
-        "`list_all_sheets.py` and the snapshot extension.",
+    st.markdown("### PR (Public Relations)")
+    st.caption("Lead: **Akash P K** · Retainer: **Aim High India**.")
+    render_retainer_card("PR", len(_months_in_range(start_date, end_date)))
+    st.info(
+        "PR sheet is connected (`Tr4HPLouJsXRHt...`). Pulls the most-recent "
+        "fortnightly tab. Ask MU for which tab to snapshot regularly and the "
+        "publications-per-month-tiered view will populate."
     )
 
 
@@ -3857,6 +3859,370 @@ def render_partnerships_placeholder(start_date: date, end_date: date):
         "Brand-to-brand collaborations (distinct from creator deals, which "
         "live under Influencer Marketing). No data source connected yet.",
     )
+
+
+# ============================================================================
+# Retainer attribution — Inagiffy → ORM + Newsletters; Aim High → PR
+# ============================================================================
+# Monthly retainer costs (₹). Update these when MU confirms exact rates.
+RETAINER_MONTHLY = {
+    "ORM": {
+        "vendor": "Inagiffy Solutions",
+        "monthly_cost": 400000,  # ₹4L/month
+        "scope": "Reddit + Quora ORM management",
+    },
+    "Newsletters": {
+        "vendor": "Inagiffy Solutions",
+        "monthly_cost": 100000,  # ₹1L/month
+        "scope": "Newsletter ops + ESP management for all three newsletters",
+    },
+    "PR": {
+        "vendor": "Aim High India",
+        "monthly_cost": 200000,  # ₹2L/month — estimate, MU to confirm
+        "scope": "PR strategy, press outreach, publication tracking",
+    },
+}
+
+
+def render_retainer_card(area_key: str, months_in_range: int):
+    """Compact retainer attribution tile for ORM / Newsletters / PR pages."""
+    info = RETAINER_MONTHLY.get(area_key)
+    if not info:
+        return
+    total = info["monthly_cost"] * max(months_in_range, 1)
+    st.markdown(
+        f"""
+        <div class="mu-pod-card" style="margin-bottom:1rem;">
+          <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{MU_ORANGE};"></span>
+            <span style="font-family:'DM Sans',sans-serif;font-weight:700;font-size:0.78rem;letter-spacing:0.12em;text-transform:uppercase;color:{MU_BLACK};">
+              Retainer cost in range
+            </span>
+          </div>
+          <div style="display:flex;gap:1.5rem;flex-wrap:wrap;">
+            <div>
+              <div style="font-family:'DM Sans',sans-serif;font-weight:700;font-size:1.7rem;color:{MU_BLACK};letter-spacing:-0.02em;">
+                ₹{total/100000:.1f} L
+              </div>
+              <div style="font-family:'DM Sans',sans-serif;font-size:0.72rem;color:{MU_GREY_3};letter-spacing:0.08em;text-transform:uppercase;">
+                Total ({months_in_range} {"month" if months_in_range==1 else "months"})
+              </div>
+            </div>
+            <div>
+              <div style="font-family:'DM Sans',sans-serif;font-weight:600;font-size:1.05rem;color:{MU_BLACK};">{info['vendor']}</div>
+              <div style="font-family:'DM Sans',sans-serif;font-size:0.78rem;color:{MU_GREY_3};line-height:1.45;">
+                ₹{info['monthly_cost']/100000:.1f} L / month · {info['scope']}
+              </div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================================
+# Influencer Marketing view — campaign cards, sortable, click-through detail
+# ============================================================================
+
+INFLUENCER_SHEET_ID = "1RCMD8DHsIVBnwrIfl_2qgvt0LQZaUG2eoDFLwwuHano"
+
+
+@st.cache_data(ttl=1800)
+def _load_influencer_collabs() -> list:
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select sr.data
+                from snapshot_rows sr
+                join snapshots s on sr.snapshot_id = s.id
+                where s.tab_name = '2025 Collabs' and s.sheet_id = %s
+                  and s.id = (
+                      select id from snapshots
+                      where tab_name = '2025 Collabs' and sheet_id = %s
+                      order by captured_at desc limit 1
+                  )
+                  and not sr.is_divider
+                order by sr.row_number
+                """,
+                (INFLUENCER_SHEET_ID, INFLUENCER_SHEET_ID),
+            )
+            return [r[0] for r in cur.fetchall() if r[0]]
+    finally:
+        conn.close()
+
+
+def _parse_influencer_date(s):
+    """Influencer dates look like 'Wednesday, 30 April' (no year). Assume 2025."""
+    if not s:
+        return None
+    s = str(s).strip()
+    if not s:
+        return None
+    import re
+    s_clean = re.sub(r"^[A-Za-z]+,\s*", "", s).strip()  # drop weekday
+    s_clean = re.sub(r"(\d+)(st|nd|rd|th)", r"\1", s_clean)
+    if not re.search(r"\d{4}", s_clean):
+        s_clean += " 2025"
+    for fmt in ["%d %B %Y", "%d %b %Y", "%d/%m/%Y", "%d-%m-%Y"]:
+        try:
+            return datetime.strptime(s_clean, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _campaign_record(row: dict) -> dict:
+    """Normalise one row from 2025 Collabs into a card-friendly record."""
+    name = (row.get("Name ") or row.get("Name") or "").strip() or "(no name)"
+    return {
+        "Name": name,
+        "Agency": (row.get("Agency") or "").strip(),
+        "Platform": (row.get("Platform") or "").strip(),
+        "Status": (row.get("Status") or "").strip(),
+        "SPOC": (row.get("Executed by MU : SPOC") or "").strip(),
+        "Vertical": (row.get("Executed for : Vertical") or "").strip(),
+        "Course": (row.get("Executed for : Course") or "").strip(),
+        "Date": _parse_influencer_date(row.get("Date of Publish")),
+        "Date raw": (row.get("Date of Publish") or "").strip(),
+        "Spend": _money_to_float(row.get("Budget Spent")),
+        "Views": int(_parse_count(row.get("No. of Views")) or 0),
+        "Impressions": int(_parse_count(row.get("No. of Impression")) or 0),
+        "Likes": int(_parse_count(row.get("Likes")) or 0),
+        "Comments": int(_parse_count(row.get("Comments")) or 0),
+        "Shares": int(_parse_count(row.get("Shares")) or 0),
+        "Saves": int(_parse_count(row.get("Saves")) or 0),
+        "CPV": _money_to_float(row.get("Cost Per View")),
+        "Engagement": (row.get("Engagement Rate") or "").strip(),
+        "Score SPOC": (row.get("Campaign Score (by the SPOC)") or "").strip(),
+        "Score PnL": (row.get("Campaign Score (by the P&L Holder)") or "").strip(),
+        "Link": (row.get("Link of Published Post") or row.get("Link") or "").strip(),
+        "UTM": (row.get("UTM (if any)") or "").strip(),
+        "POC": (row.get("Agency POC") or "").strip(),
+        "Email": (row.get("Email ID") or "").strip(),
+        "Remarks": (row.get("Remarks/Learnings by Khushi") or row.get("Remarks") or "").strip(),
+    }
+
+
+def render_influencer_marketing(start_date: date, end_date: date):
+    """Marquee creator-campaign view with sortable cards and click-through."""
+    st.markdown("### Influencer Marketing")
+    st.caption(
+        "Lead: **Khushi Nahar** · Marquee creator campaigns from agencies "
+        "(Monk-E, YAAS, Finnet, Orlina). Sort, filter, click any campaign to drill into detail."
+    )
+
+    rows = _load_influencer_collabs()
+    if not rows:
+        st.warning("No Influencer Marketing data in the database. Run `python snapshot_all.py`.")
+        return
+
+    campaigns = [_campaign_record(r) for r in rows]
+    # Filter to date range (campaigns without a date are kept, marked N/A)
+    in_range = []
+    no_date = []
+    for c in campaigns:
+        if c["Date"] is None:
+            no_date.append(c)
+        elif start_date <= c["Date"] <= end_date:
+            in_range.append(c)
+
+    use_set = in_range if in_range else (no_date if no_date else campaigns)
+
+    # Headline KPIs
+    total_spend = sum(c["Spend"] for c in use_set)
+    total_views = sum(c["Views"] for c in use_set)
+    total_impr = sum(c["Impressions"] for c in use_set)
+    avg_cpv = (total_spend / total_views) if total_views else None
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Campaigns", len(use_set))
+    k2.metric("Total spend", _money_compact(total_spend))
+    k3.metric("Total views", f"{total_views:,}")
+    k4.metric("Total impressions", f"{total_impr:,}")
+    k5.metric("Avg cost per view", f"₹{avg_cpv:.2f}" if avg_cpv else "—")
+
+    # Filters and sort
+    fcol1, fcol2, fcol3 = st.columns(3)
+    agencies = sorted({c["Agency"] for c in use_set if c["Agency"]})
+    platforms = sorted({c["Platform"] for c in use_set if c["Platform"]})
+    sel_agency = fcol1.multiselect("Filter by agency", agencies, default=[])
+    sel_platform = fcol2.multiselect("Filter by platform", platforms, default=[])
+    sort_by = fcol3.selectbox(
+        "Sort by",
+        ["Views (most popular)", "Spend (highest)", "CPV (lowest first)",
+         "Date (most recent)"],
+    )
+
+    filtered = [
+        c for c in use_set
+        if (not sel_agency or c["Agency"] in sel_agency)
+        and (not sel_platform or c["Platform"] in sel_platform)
+    ]
+
+    if sort_by == "Views (most popular)":
+        filtered.sort(key=lambda c: c["Views"], reverse=True)
+    elif sort_by == "Spend (highest)":
+        filtered.sort(key=lambda c: c["Spend"], reverse=True)
+    elif sort_by == "CPV (lowest first)":
+        filtered.sort(key=lambda c: c["CPV"] if c["CPV"] > 0 else 9e9)
+    else:
+        filtered.sort(key=lambda c: c["Date"] or date(1900, 1, 1), reverse=True)
+
+    st.caption(f"Showing **{len(filtered)}** of {len(use_set)} campaigns.")
+
+    # Campaign open state (stays in session)
+    open_key = "influencer_open_campaign"
+    open_idx = st.session_state.get(open_key)
+
+    if open_idx is not None and 0 <= open_idx < len(filtered):
+        c = filtered[open_idx]
+        if st.button("← Back to all campaigns", key="back_inf_campaign"):
+            st.session_state[open_key] = None
+            st.rerun()
+        _render_campaign_detail(c)
+        return
+
+    # Cards grid (2 columns)
+    for i in range(0, len(filtered), 2):
+        cols = st.columns(2, gap="medium")
+        for j, col in enumerate(cols):
+            if i + j < len(filtered):
+                with col:
+                    _render_campaign_card(filtered[i + j], i + j, open_key)
+
+
+def _render_campaign_card(c: dict, idx: int, open_key: str):
+    platform_colour = colour_for(c["Platform"]) if c["Platform"] else MU_GREY_3
+    cpv_label = f"₹{c['CPV']:.2f}/view" if c['CPV'] > 0 else "—"
+    views_label = f"{c['Views']:,}" if c['Views'] else "—"
+    spend_label = _money_compact(c["Spend"]) if c["Spend"] else "—"
+    date_label = c["Date"].strftime("%d %b %Y") if c["Date"] else c["Date raw"] or "No date"
+
+    card_html = f"""
+    <div class="mu-pod-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.6rem;margin-bottom:0.6rem;">
+        <div>
+          <div class="mu-pod-name">{c['Name']}</div>
+          <div class="mu-pod-sub">{c['Agency'] or 'No agency'} · {date_label}</div>
+        </div>
+        <div style="background:{platform_colour};color:#FFFFFF;padding:0.25rem 0.65rem;border-radius:999px;font-family:'DM Sans',sans-serif;font-size:0.7rem;font-weight:600;letter-spacing:0.05em;white-space:nowrap;">
+          {c['Platform'] or 'N/A'}
+        </div>
+      </div>
+      <div class="mu-pod-stats">
+        <div class="mu-pod-stat">
+          <div class="mu-pod-stat-value">{views_label}</div>
+          <div class="mu-pod-stat-label">Views</div>
+        </div>
+        <div class="mu-pod-stat">
+          <div class="mu-pod-stat-value">{spend_label}</div>
+          <div class="mu-pod-stat-label">Spend</div>
+        </div>
+        <div class="mu-pod-stat">
+          <div class="mu-pod-stat-value">{cpv_label}</div>
+          <div class="mu-pod-stat-label">CPV</div>
+        </div>
+      </div>
+    </div>
+    """
+    st.markdown(card_html, unsafe_allow_html=True)
+    if st.button(f"Open campaign →", key=f"open_inf_{idx}", use_container_width=True):
+        st.session_state[open_key] = idx
+        st.rerun()
+
+
+def _render_campaign_detail(c: dict):
+    date_label = c["Date"].strftime("%A, %d %B %Y") if c["Date"] else (c["Date raw"] or "Date not recorded")
+    platform_colour = colour_for(c["Platform"]) if c["Platform"] else MU_GREY_3
+
+    # Header
+    st.markdown(
+        f"""
+        <div style="margin:0.5rem 0 1.5rem 0;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;">
+            <div>
+              <div style="font-family:'DM Sans',sans-serif;font-weight:700;font-size:1.8rem;color:{MU_BLACK};letter-spacing:-0.02em;line-height:1.15;">
+                {c['Name']}
+              </div>
+              <div style="font-family:'DM Sans',sans-serif;font-size:0.92rem;color:{MU_GREY_3};margin-top:0.3rem;">
+                {c['Agency']} · {date_label} · SPOC: {c['SPOC'] or 'N/A'}
+              </div>
+            </div>
+            <div style="background:{platform_colour};color:#FFFFFF;padding:0.4rem 1rem;border-radius:999px;font-family:'DM Sans',sans-serif;font-weight:600;font-size:0.85rem;">
+              {c['Platform'] or 'N/A'} · {c['Status'] or 'No status'}
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # KPI row 1: views/spend/cpv
+    cv1, cv2, cv3, cv4 = st.columns(4)
+    cv1.metric("Views", f"{c['Views']:,}" if c['Views'] else "—")
+    cv2.metric("Impressions", f"{c['Impressions']:,}" if c['Impressions'] else "—")
+    cv3.metric("Spend", _money_compact(c['Spend']) if c['Spend'] else "—")
+    cv4.metric("Cost per view", f"₹{c['CPV']:.2f}" if c['CPV'] > 0 else "—")
+
+    # KPI row 2: engagement
+    e1, e2, e3, e4 = st.columns(4)
+    e1.metric("Likes", f"{c['Likes']:,}")
+    e2.metric("Comments", f"{c['Comments']:,}")
+    e3.metric("Shares", f"{c['Shares']:,}")
+    e4.metric("Saves", f"{c['Saves']:,}")
+
+    if c["Engagement"]:
+        st.caption(f"Engagement rate: **{c['Engagement']}**")
+
+    # Scores
+    if c["Score SPOC"] or c["Score PnL"]:
+        st.markdown("##### Campaign scores")
+        s1, s2 = st.columns(2)
+        s1.metric("SPOC score", c["Score SPOC"] or "—")
+        s2.metric("P&L Holder score", c["Score PnL"] or "—")
+
+    # Links
+    links = []
+    if c["Link"] and c["Link"].startswith("http"):
+        links.append(("Published post", c["Link"]))
+    if c["UTM"] and c["UTM"].startswith("http"):
+        links.append(("UTM tracker", c["UTM"]))
+    if links:
+        st.markdown("##### Links")
+        link_html = "<div style='display:flex;gap:0.6rem;flex-wrap:wrap;margin-top:0.25rem;'>"
+        for label, url in links:
+            link_html += (
+                f'<a href="{url}" target="_blank" '
+                f'style="text-decoration:none;background:#FFFFFF;border:1px solid {MU_LIGHT_GREY};'
+                f'padding:0.5rem 1rem;border-radius:999px;color:{MU_BLACK};'
+                f"font-family:'DM Sans',sans-serif;font-weight:500;font-size:0.85rem;display:inline-block;\">"
+                f'{label} ↗</a>'
+            )
+        link_html += "</div>"
+        st.markdown(link_html, unsafe_allow_html=True)
+
+    # Embedded preview for Instagram links
+    if c["Link"] and "instagram.com/reel" in c["Link"]:
+        st.markdown("##### Preview")
+        st.markdown(
+            f'<iframe src="{c["Link"]}embed/" '
+            f'width="400" height="700" frameborder="0" '
+            f'scrolling="no" allowtransparency="true" '
+            f'style="border-radius:12px;"></iframe>',
+            unsafe_allow_html=True,
+        )
+
+    # Agency contact
+    if c["POC"] or c["Email"]:
+        st.markdown("##### Agency contact")
+        st.caption(f"{c['POC']} · {c['Email']}")
+
+    # Remarks
+    if c["Remarks"]:
+        st.markdown("##### Khushi's notes")
+        st.write(c["Remarks"])
 
 
 def render_vertical(sd: str, v: str, start_date: date, end_date: date):
