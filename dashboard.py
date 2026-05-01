@@ -3704,9 +3704,13 @@ def _render_one_newsletter(name: str, lead: str, tab_name: str):
         st.info(f"No data snapshotted for {name}. Run `python snapshot_all.py`.")
         return
 
-    # Build trend data
+    # Build trend data — try several known subject-column variants
+    subject_keys = [
+        "Subject Line (#1)", "Subject Line", "Subject",
+        "Subject (#1)", "Email Subject", "Newsletter Subject",
+    ]
+
     trend = []
-    latest = None
     for r in rows:
         d = _parse_newsletter_date(r.get("Newsletter Deployment Date"))
         if not d:
@@ -3717,11 +3721,17 @@ def _render_one_newsletter(name: str, lead: str, tab_name: str):
         open_rate = _parse_count(r.get("Open rates"))
         clicks = _parse_count(r.get("Absolute Clicks"))
         unsub = _parse_count(r.get("Unsubscribers"))
+        subject = ""
+        for sk in subject_keys:
+            v = (r.get(sk) or "").strip()
+            if v:
+                subject = v
+                break
         trend.append({
             "Date": d, "Sent": sent or 0, "Delivered": delivered or 0,
             "Opens": opens or 0, "Open rate": (open_rate or 0) * 100,
             "Clicks": clicks or 0, "Unsubscribers": unsub or 0,
-            "Subject": r.get("Subject Line (#1)") or r.get("Subject Line") or "",
+            "Subject": subject,
         })
 
     if not trend:
@@ -3763,7 +3773,7 @@ def _render_one_newsletter(name: str, lead: str, tab_name: str):
     fig2.update_layout(height=280)
     st.plotly_chart(fig2, use_container_width=True, key=f"nl_send_{tab_name}")
 
-    # Recent issues table
+    # Recent issues table — drop Subject column if no row has one
     st.markdown("##### Recent issues")
     display = trend_df.tail(10).iloc[::-1].copy()
     display["Date"] = display["Date"].apply(lambda d: d.strftime("%d %b %Y"))
@@ -3771,8 +3781,17 @@ def _render_one_newsletter(name: str, lead: str, tab_name: str):
     display["Sent"] = display["Sent"].apply(lambda v: f"{int(v):,}")
     display["Delivered"] = display["Delivered"].apply(lambda v: f"{int(v):,}")
     display["Opens"] = display["Opens"].apply(lambda v: f"{int(v):,}")
-    st.dataframe(display[["Date", "Subject", "Sent", "Delivered", "Opens", "Open rate"]],
-                 use_container_width=True, hide_index=True)
+
+    has_any_subject = display["Subject"].astype(str).str.strip().ne("").any()
+    if has_any_subject:
+        cols = ["Date", "Subject", "Sent", "Delivered", "Opens", "Open rate"]
+    else:
+        cols = ["Date", "Sent", "Delivered", "Opens", "Open rate"]
+        st.caption(
+            "ℹ️ This newsletter sheet does not track subject lines. "
+            "Add a `Subject Line` column in the source sheet and the column will appear here automatically."
+        )
+    st.dataframe(display[cols], use_container_width=True, hide_index=True)
 
 
 def render_newsletters_placeholder(start_date: date, end_date: date):
