@@ -2781,7 +2781,7 @@ def render_pod_aop(pod_name: str):
 
 
 def render_overview_costing(start_date: date, end_date: date):
-    """Cross-pod costing summary for the Overview tab."""
+    """Three pie charts: spend per pod, videos shipped per pod, reach by channel."""
     months = _months_in_range(start_date, end_date)
     if not months:
         st.info("Date range does not cover any month.")
@@ -2789,10 +2789,8 @@ def render_overview_costing(start_date: date, end_date: date):
 
     salary_visible = st.session_state.get("salary_visible", False)
 
+    # Gather per-pod data
     rows = []
-    grand_salary = 0.0
-    grand_expense = 0.0
-    grand_shipped = 0
     for pod in PODS:
         salary = sum(_pod_salary_for_month(pod, y, m) for (y, m) in months)
         expense = sum(_pod_expenses_for_month(pod, y, m) for (y, m) in months)
@@ -2803,78 +2801,129 @@ def render_overview_costing(start_date: date, end_date: date):
         if df is not None and not df.empty:
             df_in = df[df["in_range"]]
             shipped = int((df_in["status"] == final_status).sum())
-        cost = salary + expense
-        target = (POD_MONTHLY_TARGETS.get(pod) or 0) * len(months)
         rows.append({
             "Pod": pod_display(pod),
-            "Target": target if target else None,
-            "Shipped": shipped,
             "Salary": salary,
             "Expenses": expense,
-            "Total spend": cost,
-            "Cost per video": (cost / shipped) if shipped else None,
+            "Total spend": salary + expense,
+            "Shipped": shipped,
         })
-        grand_salary += salary
-        grand_expense += expense
-        grand_shipped += shipped
 
-    grand_total = grand_salary + grand_expense
-    grand_cpv = (grand_total / grand_shipped) if grand_shipped else None
+    df_pods = pd.DataFrame(rows)
+    grand_expense = df_pods["Expenses"].sum()
+    grand_salary = df_pods["Salary"].sum()
+    grand_shipped = int(df_pods["Shipped"].sum())
+    grand_spend_visible = grand_expense + (grand_salary if salary_visible else 0)
+    avg_cpv = (grand_spend_visible / grand_shipped) if grand_shipped else None
 
-    # Top tiles — salary tile only renders when the eye is on, otherwise
-    # we drop down to three tiles so nothing overflows.
-    if salary_visible:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total spend (all pods)", _money_compact(grand_total))
-        c2.metric("Salary share", _money_compact(grand_salary))
-        c3.metric("Content expenses share", _money_compact(grand_expense))
-        c4.metric("Avg cost per video", _money_compact(grand_cpv) if grand_cpv else "—")
-    else:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total content expenses", _money_compact(grand_expense))
-        c2.metric("Videos shipped", grand_shipped)
-        c3.metric("Cost per video (excl. salary)",
-                  _money_compact((grand_expense / grand_shipped) if grand_shipped else None) if grand_shipped else "—")
+    # Headline tiles
+    c1, c2, c3 = st.columns(3)
+    c1.metric(
+        "Total spend" + ("" if salary_visible else " (excl. salary)"),
+        _money_compact(grand_spend_visible) if grand_spend_visible else "—",
+    )
+    c2.metric("Videos shipped", grand_shipped)
+    c3.metric("Avg cost per video",
+              _money_compact(avg_cpv) if avg_cpv else "—")
 
     st.caption(
-        f"Spend window: {format_range(start_date, end_date)} "
-        f"({len(months)} month{'s' if len(months)!=1 else ''}). "
-        f"{grand_shipped} videos shipped across all pods."
+        f"Window: {format_range(start_date, end_date)} · "
+        f"{len(months)} month{'s' if len(months)!=1 else ''} · "
+        f"toggle 👁️ on any pod's Finance tab to include salary."
     )
 
-    # Per-pod table
-    st.markdown("##### Per-pod breakdown")
-    df = pd.DataFrame(rows)
-    df_display = df.copy()
-    df_display["Salary"] = df_display["Salary"].apply(
-        lambda v: _money_compact(v) if salary_visible else "•••"
-    )
-    df_display["Expenses"] = df_display["Expenses"].apply(_money_compact)
-    df_display["Total spend"] = df_display["Total spend"].apply(_money_compact)
-    df_display["Cost per video"] = df_display["Cost per video"].apply(
-        lambda v: _money_compact(v) if v else "—"
-    )
-    df_display["Target"] = df_display["Target"].apply(
-        lambda v: int(v) if v else "—"
-    )
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
+    # ---- Pie 1: Spend per pod ----
+    spend_col = "Total spend" if salary_visible else "Expenses"
+    spend_df = df_pods[df_pods[spend_col] > 0].copy()
 
-    # Per-pod spend bar
-    st.markdown("##### Spend per pod")
-    bar_df = df[["Pod", "Salary", "Expenses"]].copy()
-    if not salary_visible:
-        bar_df["Salary"] = 0
-    bar_long = bar_df.melt(id_vars=["Pod"], var_name="Component",
-                            value_name="Amount")
-    fig = px.bar(
-        bar_long, x="Pod", y="Amount", color="Component",
-        color_discrete_map={"Salary": MU_CYAN, "Expenses": MU_ORANGE},
-        barmode="stack",
+    p1, p2 = st.columns(2, gap="large")
+
+    with p1:
+        st.markdown("#### Spend per pod")
+        if spend_df.empty:
+            st.info("No spend recorded against any pod in this range.")
+        else:
+            colour_map = {p: colour_for(p) for p in spend_df["Pod"]}
+            fig = px.pie(
+                spend_df, values=spend_col, names="Pod",
+                color="Pod", color_discrete_map=colour_map, hole=0.55,
+            )
+            fig.update_traces(
+                textinfo="label+percent",
+                textposition="outside",
+                textfont=dict(family="DM Sans, sans-serif", size=12, color=MU_BLACK),
+                marker=dict(line=dict(color="white", width=3)),
+            )
+            fig = style_plotly(fig)
+            fig.update_layout(height=440, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True, key="ov_spend_pie")
+
+    # ---- Pie 2: Videos shipped per pod ----
+    shipped_df = df_pods[df_pods["Shipped"] > 0].copy()
+
+    with p2:
+        st.markdown("#### Videos shipped per pod")
+        if shipped_df.empty:
+            st.info("No videos hit Live or Delivered in this range.")
+        else:
+            colour_map = {p: colour_for(p) for p in shipped_df["Pod"]}
+            fig = px.pie(
+                shipped_df, values="Shipped", names="Pod",
+                color="Pod", color_discrete_map=colour_map, hole=0.55,
+            )
+            fig.update_traces(
+                textinfo="label+value",
+                textposition="outside",
+                textfont=dict(family="DM Sans, sans-serif", size=12, color=MU_BLACK),
+                marker=dict(line=dict(color="white", width=3)),
+            )
+            fig = style_plotly(fig)
+            fig.update_layout(height=440, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True, key="ov_shipped_pie")
+
+    # ---- Pie 3: Reach by channel (Influencer Marketing) ----
+    st.markdown("#### Reach by channel — Influencer Marketing")
+    st.caption(
+        "Total reach (views + impressions) from creator campaigns in range, "
+        "split by platform. In-house channel reach activates once YT/IG analytics is wired."
     )
-    fig.update_layout(yaxis_title="₹", xaxis_title="", legend_title_text="")
-    fig = style_plotly(fig)
-    fig.update_layout(height=360)
-    st.plotly_chart(fig, use_container_width=True, key="overview_costing_bar")
+
+    inf_rows = _load_influencer_collabs()
+    by_channel: dict = {}
+    for r in inf_rows:
+        d = _parse_influencer_date(r.get("Date of Publish"))
+        if not d or not (start_date <= d <= end_date):
+            continue
+        plat = (r.get("Platform") or "").strip() or "Unspecified"
+        views = _parse_count(r.get("No. of Views")) or 0
+        impr = _parse_count(r.get("No. of Impression")) or 0
+        by_channel[plat] = by_channel.get(plat, 0) + (views + impr)
+
+    if by_channel and sum(by_channel.values()) > 0:
+        ch_df = pd.DataFrame([
+            {"Channel": k, "Reach": int(v)} for k, v in by_channel.items() if v > 0
+        ]).sort_values("Reach", ascending=False)
+        colour_map = {p: colour_for(p) for p in ch_df["Channel"]}
+        fig = px.pie(
+            ch_df, values="Reach", names="Channel",
+            color="Channel", color_discrete_map=colour_map, hole=0.55,
+        )
+        fig.update_traces(
+            textinfo="label+value+percent",
+            textposition="outside",
+            textfont=dict(family="DM Sans, sans-serif", size=12, color=MU_BLACK),
+            marker=dict(line=dict(color="white", width=3)),
+        )
+        fig = style_plotly(fig)
+        fig.update_layout(height=460, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True, key="ov_channel_pie")
+        total_reach = ch_df["Reach"].sum()
+        st.caption(f"Total influencer reach in range: **{total_reach:,}** across {len(ch_df)} channels.")
+    else:
+        st.info(
+            "No influencer-campaign reach in this date range. Either no campaigns "
+            "were published in this window or the views/impressions cells are blank."
+        )
 
 
 def render_overview_aop():
