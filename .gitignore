@@ -1,0 +1,42 @@
+# Secrets and credentials — NEVER commit these
+.env
+.env.*
+credentials/
+*.pem
+*.key
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# Tunnels and binaries
+cloudflared.exe
+*.log
+tunnel.log
+tunnel2.log
+tunnel3.log
+streamlit.log
+
+# Local data
+meeting_notes/
+*.db
+*.sqlite
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Streamlit local config (deploy-time secrets go in cloud, not here)
+.streamlit/secrets.toml

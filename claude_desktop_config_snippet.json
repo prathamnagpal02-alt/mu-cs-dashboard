@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "cs-dashboard": {
+      "command": "C:\\Users\\Admin\\Desktop\\Weekly Report\\venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\Admin\\Desktop\\Weekly Report\\mcp_server.py"
+      ]
+    }
+  }
+}
