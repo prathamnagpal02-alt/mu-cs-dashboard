@@ -91,10 +91,12 @@ ORM_TABS = ["Reddit", "Quora"]
 # tabs (WLDD x Rohit, etc.) can be added later if needed.
 INFLUENCER_TABS = ["2025 Collabs", "Planned"]
 
-# PR — pulling the most recent date-range tab makes most sense; for now
-# we pull the entire workbook is too noisy. Skipping in v1, MU will tell us
-# which tab to pull.
-PR_TABS = []  # placeholder
+# PR — three workbook-wide tabs are the right grain (the per-fortnight tabs
+# are working drafts that get rolled into these). Print + Online give us
+# coverage hits by date and publication; "Circulation and Readership" is
+# the publication tier reference table that lets us bucket each hit into
+# Tier 1/2/3 and estimate reach.
+PR_TABS = ["Print", "Online", "Circulation and Readership"]
 
 INSERT_PAGE_SIZE = 500
 
@@ -274,6 +276,12 @@ def main():
     if INFLUENCER_TABS:
         snapshot_supplementary_sheet(
             gc, INFLUENCER_SHEET_ID, "Influencer Marketing", INFLUENCER_TABS,
+        )
+
+    # --- PR ---
+    if PR_TABS:
+        snapshot_supplementary_sheet(
+            gc, PR_SHEET_ID, "PR", PR_TABS,
         )
 
     elapsed = (datetime.now() - start).total_seconds()
