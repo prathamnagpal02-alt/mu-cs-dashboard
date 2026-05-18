@@ -811,6 +811,38 @@ def pod_date_columns(pod_name: str) -> list:
     return BASE_DATE_COLUMNS + PODS.get(pod_name, {}).get("upload_cols", [])
 
 
+# --- Marquee vs Micro Brand Films classification ---
+# Historic Brand/Ad Films were almost all Marquee (PGP Bharat-style flagship
+# films). Going forward, Micro films are short ones for new/smaller courses.
+# Brand pod can tag rows by adding a "Film Type" column to the sheet with
+# "Marquee" or "Micro" as the value. Until that's populated, every row is
+# treated as Marquee, which matches the historic reality.
+FILM_TYPE_COLUMNS = ["Film Type", "Marquee/Micro", "Film Tier"]
+FILM_TYPE_DEFAULT = "Marquee"
+
+
+def classify_film_type(row_data: dict) -> str:
+    """Return 'Marquee' or 'Micro' for a Brand/Ad Films row. Defaults to
+    Marquee when no tag is present (the historic reality)."""
+    for col in FILM_TYPE_COLUMNS:
+        v = str(row_data.get(col, "") or "").strip().lower()
+        if not v:
+            continue
+        if v.startswith("micro"):
+            return "Micro"
+        if v.startswith("marquee"):
+            return "Marquee"
+    return FILM_TYPE_DEFAULT
+
+
+def _is_marquee_film(d: dict) -> bool:
+    return classify_film_type(d) == "Marquee"
+
+
+def _is_micro_film(d: dict) -> bool:
+    return classify_film_type(d) == "Micro"
+
+
 def pod_status_order(pod_name: str) -> list:
     return (
         STATUS_ORDER_UPLOAD
@@ -1014,8 +1046,9 @@ def parse_crew(s) -> list:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def _prepare_pod_status(pod_name: str) -> Optional[pd.DataFrame]:
-    """Cached status computation. Cache key only depends on the pod name,
-    so toggling the date range does NOT invalidate this expensive step."""
+    """Cached status computation + pre-parsed dates. Toggling the date range
+    does NOT invalidate this step. Pre-parsing dates here means downstream
+    filtering is a fast comparison instead of re-parsing strings every time."""
     df = load_latest_snapshot(pod_name)
     if df.empty:
         return None
@@ -1025,7 +1058,28 @@ def _prepare_pod_status(pod_name: str) -> Optional[pd.DataFrame]:
         return df
 
     df["status"] = df["data"].apply(lambda r: compute_status(r, pod_name))
+
+    # Pre-parse every date column once. has_date_in_range becomes a dict
+    # lookup + comparison instead of strptime over 7 candidate formats per cell.
+    date_cols = pod_date_columns(pod_name)
+    df["parsed_dates"] = df["data"].apply(
+        lambda r: tuple(parse_date(r.get(c)) for c in date_cols)
+    )
+    df = df.reset_index(drop=True)
     return df
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _compute_in_range_mask(pod_name: str, start: date, end: date) -> Optional[list]:
+    """Cache the in-range boolean per (pod, start, end). One render hits this
+    helper many times with the same args; only the first call computes."""
+    df = _prepare_pod_status(pod_name)
+    if df is None or df.empty:
+        return None
+    return [
+        any(d is not None and start <= d <= end for d in dates)
+        for dates in df["parsed_dates"]
+    ]
 
 
 def prepare_pod_df(pod_name: str, start: date, end: date) -> Optional[pd.DataFrame]:
@@ -1036,10 +1090,8 @@ def prepare_pod_df(pod_name: str, start: date, end: date) -> Optional[pd.DataFra
     df = df.copy()
     if df.empty:
         return df
-    date_cols = pod_date_columns(pod_name)
-    df["in_range"] = df["data"].apply(
-        lambda r: has_date_in_range(r, start, end, date_cols)
-    )
+    mask = _compute_in_range_mask(pod_name, start, end)
+    df["in_range"] = mask if mask is not None else False
     return df
 
 
@@ -1368,12 +1420,20 @@ def style_plotly(fig):
 @st.cache_resource
 def warm_caches():
     """Pre-warm the Postgres-backed caches on first app load so the user does
-    not pay the round-trip cost on the very first interaction."""
+    not pay the round-trip cost on the very first interaction. We also
+    pre-compute the per-pod parsed-date columns so date-range changes are
+    fast from the very first interaction (otherwise the first range change
+    pays a one-time strptime tax across every row of every pod)."""
     load_all_pod_snapshots()
     try:
         load_coverage_snapshot()
     except Exception:
         pass
+    for pod_name in PODS:
+        try:
+            _prepare_pod_status(pod_name)
+        except Exception:
+            pass
     return True
 
 
@@ -1660,6 +1720,26 @@ def render_pod_detail(pod_name: str, start_date: date, end_date: date):
     )
 
     df_month = df[df["in_range"]].reset_index(drop=True)
+
+    # Brand/Ad Films: optional Marquee vs Micro filter. Historic rows with
+    # no 'Film Type' tag default to Marquee.
+    if pod_name == "Brand/Ad films" and not df_month.empty:
+        choice = st.radio(
+            "Film type",
+            ["All films", "Marquee only", "Micro only"],
+            index=0,
+            horizontal=True,
+            key=f"film_type_filter_{pod_name}",
+            help="Marquee = flagship PGP Bharat-style films. Micro = shorter "
+                 "films for new and smaller courses. Untagged rows default to "
+                 "Marquee. Tag the 'Film Type' column in the sheet to override.",
+        )
+        if choice != "All films":
+            target = "Marquee" if "Marquee" in choice else "Micro"
+            df_month = df_month[
+                df_month["data"].apply(classify_film_type) == target
+            ].reset_index(drop=True)
+            st.caption(f"Showing **{target}** films only — {len(df_month)} row(s) in range.")
 
     has_upload = bool(PODS[pod_name]["upload_cols"])
     final_status = "Live" if has_upload else "Delivered"
@@ -2605,15 +2685,16 @@ FY27_START = date(2026, 4, 1)
 FY27_END = date(2027, 3, 31)
 
 # Per-pod deliverables (subset of ROI Summary that maps to our production pods).
-# `count_filter` can be a dict to filter rows by a column value (e.g. {"Type": "Marquee"}).
+# `count_filter` can be either a dict (column-equality match) OR a callable
+# that takes the row's data dict and returns True/False.
 POD_AOP_TARGETS = {
     "Brand/Ad films": [
         {"deliverable": "Marquee Brand Films", "annual_target": 4,
-         "frequency": "1/quarter", "count_filter": None,
-         "note": "Filter by Type column once Marquee/Micro tagging is consistent."},
+         "frequency": "1/quarter", "count_filter": _is_marquee_film,
+         "note": "Historic films default to Marquee. Add a 'Film Type' column to the sheet and tag new films 'Micro' to override."},
         {"deliverable": "Micro Brand Films", "annual_target": 8,
-         "frequency": "2/quarter", "count_filter": None,
-         "note": "Filter by Type column once Marquee/Micro tagging is consistent."},
+         "frequency": "2/quarter", "count_filter": _is_micro_film,
+         "note": "Tag the 'Film Type' column with 'Micro' for new short-course films."},
     ],
     "Perf Ads": [
         {"deliverable": "Performance Ads", "annual_target": 120,
@@ -2684,15 +2765,19 @@ def _count_pod_deliveries_in_fy(pod_name: str, fy_start: date, fy_end: date,
                 break
         if not completion_date or not (fy_start <= completion_date <= fy_end):
             continue
-        # Optional column filter
+        # Optional column filter — dict (equality match) or callable (predicate).
         if count_filter:
-            ok = True
-            for k, v in count_filter.items():
-                if str(d.get(k, "")).strip().lower() != str(v).strip().lower():
-                    ok = False
-                    break
-            if not ok:
-                continue
+            if callable(count_filter):
+                if not count_filter(d):
+                    continue
+            else:
+                ok = True
+                for k, v in count_filter.items():
+                    if str(d.get(k, "")).strip().lower() != str(v).strip().lower():
+                        ok = False
+                        break
+                if not ok:
+                    continue
         count += 1
     return count
 
@@ -3905,15 +3990,238 @@ def render_orm_placeholder(start_date: date, end_date: date):
                 st.plotly_chart(fig2, use_container_width=True, key="orm_quora_followers")
 
 
-def render_pr_placeholder(start_date: date, end_date: date):
+PR_SHEET_ID = "1Tr4HPLouJsXRHtJDWBjsxKgLxX2StDI8Cb6f0Wyb2D0"
+
+
+@st.cache_data(ttl=600)
+def _load_pr_tab(tab_name: str) -> list:
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select sr.data
+                from snapshot_rows sr
+                join snapshots s on sr.snapshot_id = s.id
+                where s.tab_name = %s and s.sheet_id = %s
+                  and s.id = (select id from snapshots where tab_name=%s and sheet_id=%s order by captured_at desc limit 1)
+                  and not sr.is_divider
+                order by sr.row_number
+                """,
+                (tab_name, PR_SHEET_ID, tab_name, PR_SHEET_ID),
+            )
+            return [r[0] for r in cur.fetchall() if r[0]]
+    finally:
+        conn.close()
+
+
+# Tier mapping derived from the section dividers in the "Circulation and
+# Readership" tab. Each section in that tab is a tier; the publications
+# inside it inherit that tier label.
+PR_TIER_SECTIONS = [
+    ("Tier 1", ["english newspaper", "mainline", "financial"]),
+    ("Tier 2", ["magazine", "business", "general interest"]),
+    ("Tier 3", ["hindi newspaper"]),
+]
+PR_TIER_DEFAULT = "Other / Regional"
+
+
+def _normalise_pub(name: str) -> str:
+    """Normalise a publication name for matching: lowercase, strip,
+    drop leading 'the ' so 'The Economic Times' matches 'Economic Times'."""
+    s = str(name or "").strip().lower()
+    if s.startswith("the "):
+        s = s[4:]
+    return s
+
+
+@st.cache_data(ttl=600)
+def _load_pr_publication_tiers() -> dict:
+    """Return {normalised_publication_name: (tier_label, circulation, readership)}.
+    Tier inferred from the section dividers in 'Circulation and Readership'."""
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select sr.row_number, sr.data
+                from snapshot_rows sr
+                join snapshots s on sr.snapshot_id = s.id
+                where s.tab_name = %s and s.sheet_id = %s
+                  and s.id = (select id from snapshots where tab_name=%s and sheet_id=%s order by captured_at desc limit 1)
+                order by sr.row_number
+                """,
+                ("Circulation and Readership", PR_SHEET_ID,
+                 "Circulation and Readership", PR_SHEET_ID),
+            )
+            rows = [r[1] for r in cur.fetchall() if r[1]]
+    finally:
+        conn.close()
+
+    mapping = {}
+    current_tier = PR_TIER_DEFAULT
+    for r in rows:
+        pub = str(r.get("Publication", "") or "").strip()
+        circ = str(r.get("Circulation", "") or "").strip()
+        read = str(r.get("Readership", "") or "").strip()
+        if not pub:
+            continue
+        # A divider row has a populated Publication but empty Circulation
+        # and Readership (e.g. "Top English Newspapers - Financials and Mainlines").
+        if not circ and not read:
+            text = pub.lower()
+            current_tier = PR_TIER_DEFAULT
+            for tier, keywords in PR_TIER_SECTIONS:
+                if any(k in text for k in keywords):
+                    current_tier = tier
+                    break
+            continue
+        mapping[_normalise_pub(pub)] = (
+            current_tier,
+            _parse_count(circ) or 0,
+            _parse_count(read) or 0,
+        )
+    return mapping
+
+
+def _classify_pr_publication(pub_name: str, tier_map: dict) -> tuple:
+    """Returns (tier_label, readership) for a publication. Falls back to
+    'Other / Regional' with 0 readership if not in the C&R map."""
+    norm = _normalise_pub(pub_name)
+    if norm in tier_map:
+        tier, _circ, read = tier_map[norm]
+        return tier, read
+    # Try a partial match — handle short forms like "ET" → "economic times".
+    for known_norm, (tier, _circ, read) in tier_map.items():
+        if known_norm in norm or norm in known_norm:
+            return tier, read
+    return PR_TIER_DEFAULT, 0
+
+
+def _pr_rows_in_range(rows: list, start: date, end: date) -> list:
+    """Filter PR coverage rows by the 'Date' column (returns rows with a
+    parseable date inside [start, end])."""
+    out = []
+    for r in rows:
+        d = parse_date(r.get("Date") or r.get("DATE") or r.get("date"))
+        if d and start <= d <= end:
+            out.append((d, r))
+    return out
+
+
+def render_pr_view(start_date: date, end_date: date):
     st.markdown("### PR (Public Relations)")
     st.caption("Lead: **Akash P K** · Retainer: **Aim High India**.")
     render_retainer_card("PR", len(_months_in_range(start_date, end_date)))
-    st.info(
-        "PR sheet is connected (`Tr4HPLouJsXRHt...`). Pulls the most-recent "
-        "fortnightly tab. Ask MU for which tab to snapshot regularly and the "
-        "publications-per-month-tiered view will populate."
-    )
+
+    print_rows = _load_pr_tab("Print")
+    online_rows = _load_pr_tab("Online")
+    tier_map = _load_pr_publication_tiers()
+
+    if not print_rows and not online_rows:
+        st.info(
+            "PR snapshot not found yet. Run `python snapshot_all.py` to pull "
+            "the Print, Online, and Circulation & Readership tabs."
+        )
+        return
+
+    if not tier_map:
+        st.warning(
+            "Publication tier reference (Circulation and Readership tab) is "
+            "empty. Tier breakdown will all fall under 'Other / Regional'."
+        )
+
+    print_in_range = _pr_rows_in_range(print_rows, start_date, end_date)
+    online_in_range = _pr_rows_in_range(online_rows, start_date, end_date)
+
+    # Bucket by tier × medium and accumulate reach.
+    tier_order = ["Tier 1", "Tier 2", "Tier 3", PR_TIER_DEFAULT]
+    buckets = {tier: {"Print": 0, "Online": 0, "Reach": 0, "publications": {}}
+               for tier in tier_order}
+
+    for medium, dataset in (("Print", print_in_range), ("Online", online_in_range)):
+        for _d, r in dataset:
+            pub = str(r.get("Publication", "") or "").strip()
+            if not pub:
+                continue
+            tier, reach = _classify_pr_publication(pub, tier_map)
+            if tier not in buckets:
+                buckets[tier] = {"Print": 0, "Online": 0, "Reach": 0, "publications": {}}
+            buckets[tier][medium] += 1
+            buckets[tier]["Reach"] += reach
+            buckets[tier]["publications"][pub] = buckets[tier]["publications"].get(pub, 0) + 1
+
+    total_print = sum(b["Print"] for b in buckets.values())
+    total_online = sum(b["Online"] for b in buckets.values())
+    total_reach = sum(b["Reach"] for b in buckets.values())
+
+    st.markdown("#### Coverage in selected range")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total hits", total_print + total_online)
+    c2.metric("Print", total_print)
+    c3.metric("Online", total_online)
+    c4.metric("Estimated reach", f"{total_reach/1_000_000:.1f} M" if total_reach else "—")
+
+    # Tier breakdown table
+    st.markdown("#### Tier breakdown")
+    tier_rows = []
+    for tier in tier_order:
+        b = buckets[tier]
+        if b["Print"] + b["Online"] == 0:
+            continue
+        tier_rows.append({
+            "Tier": tier,
+            "Print": b["Print"],
+            "Online": b["Online"],
+            "Total": b["Print"] + b["Online"],
+            "Reach (M)": round(b["Reach"] / 1_000_000, 2) if b["Reach"] else 0,
+        })
+    if tier_rows:
+        st.dataframe(
+            pd.DataFrame(tier_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # Stacked bar — Print vs Online per tier
+        chart_df = pd.DataFrame([
+            {"Tier": r["Tier"], "Medium": "Print", "Hits": r["Print"]}
+            for r in tier_rows
+        ] + [
+            {"Tier": r["Tier"], "Medium": "Online", "Hits": r["Online"]}
+            for r in tier_rows
+        ])
+        if len(chart_df):
+            fig = px.bar(
+                chart_df, x="Tier", y="Hits", color="Medium",
+                color_discrete_map={"Print": MU_ORANGE, "Online": MU_CYAN},
+                barmode="stack",
+            )
+            fig = style_plotly(fig)
+            fig.update_layout(height=320, xaxis_title="", yaxis_title="Coverage hits",
+                              legend_title_text="")
+            st.plotly_chart(fig, use_container_width=True, key="pr_tier_bar")
+    else:
+        st.info("No PR coverage in the selected date range.")
+        return
+
+    # Top publications per tier
+    st.markdown("#### Top publications per tier")
+    for tier in tier_order:
+        pubs = buckets[tier]["publications"]
+        if not pubs:
+            continue
+        with st.expander(f"**{tier}** — {sum(pubs.values())} hit(s) across {len(pubs)} publication(s)"):
+            top = sorted(pubs.items(), key=lambda kv: -kv[1])[:15]
+            df_top = pd.DataFrame(
+                [{"Publication": p, "Hits": n} for p, n in top]
+            )
+            st.dataframe(df_top, use_container_width=True, hide_index=True)
+
+
+def render_pr_placeholder(start_date: date, end_date: date):
+    """Backwards-compat shim; calls the live PR view now."""
+    render_pr_view(start_date, end_date)
 
 
 def render_partnerships_placeholder(start_date: date, end_date: date):
