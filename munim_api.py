@@ -729,6 +729,11 @@ class Handler(BaseHTTPRequestHandler):
                 if HTML_FILE.exists():
                     return self._send(200, HTML_FILE.read_bytes(), "text/html; charset=utf-8")
                 return self._send(404, {"error": "munim.html not found next to munim_api.py"})
+            if path.startswith("/data/") and path.endswith(".json"):
+                f = HTML_FILE.parent / "munim_static" / path.lstrip("/")
+                if f.exists():
+                    return self._send(200, f.read_bytes(), "application/json")
+                return self._send(404, {"error": "no data file"})
             if path == "/api/health":
                 return self._send(200, {"ok": True, "time": datetime.now().isoformat()})
             if path == "/api/data":

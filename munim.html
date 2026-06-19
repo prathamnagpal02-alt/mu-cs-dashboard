@@ -842,7 +842,7 @@ const RANGE_DAYS={'7D':7,'30D':30,'90D':90,'QTD':90};
 function liveDays(){return RANGE_DAYS[state.range]||30;}
 async function fetchLive(){
   try{
-    const res=await fetch('/api/data?days='+liveDays(),{cache:'no-store'});
+    const res=await fetch('data/'+liveDays()+'.json',{cache:'no-store'});
     if(!res.ok)throw new Error('HTTP '+res.status);
     LIVE=await res.json();LIVE._ok=true;
   }catch(e){LIVE={_ok:false,_err:String(e)};}
@@ -886,36 +886,26 @@ function liveModel(id){
 /* ── Live AI insights ("MUनीम says", written by Claude from real numbers) ── */
 const _aiCache={};
 function mdList(s){if(!s)return '';return '<ul style="margin:5px 0 0 16px;padding:0">'+String(s).split(/\n/).filter(l=>l.trim()).map(l=>'<li style="margin:4px 0;line-height:1.45">'+l.replace(/^[-*•]\s*/,'').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')+'</li>').join('')+'</ul>';}
-async function hydrateInsights(){
-  if(!isLive())return;
+function hydrateInsights(){
+  if(!isLive()||!LIVE.insights)return;
   const v=state.view;
   if(v==='overview'){
     const host=document.querySelector('.ai');if(!host)return;
-    host.innerHTML='<div class="ai-head"><span class="pulse"></span>MUनीम · your analyst on duty<span style="margin-left:auto;font-family:var(--mono);font-size:9px;letter-spacing:.16em;color:var(--good)">● LIVE</span></div><div id="aiBody" style="margin-top:10px;color:var(--muted)">Reading your live numbers…</div>';
-    const key='ov:'+state.range;
-    try{
-      if(!_aiCache[key])_aiCache[key]=await (await fetch('/api/insights?days='+liveDays())).json();
-      const d=_aiCache[key];const b=document.getElementById('aiBody');if(!b)return;b.style.color='';
-      b.innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px">
+    const d=LIVE.insights.overall;if(!d)return;
+    host.innerHTML=`<div class="ai-head"><span class="pulse"></span>MUनीम · your analyst on duty<span style="margin-left:auto;font-family:var(--mono);font-size:9px;letter-spacing:.16em;color:var(--good)">● LIVE</span></div>
+      <div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px">
         <div><span class="sg-tag" style="background:var(--good);color:#fff">Wins</span>${mdList(d.wins)}</div>
         <div><span class="sg-tag" style="background:var(--bad);color:#fff">Risks</span>${mdList(d.risks)}</div>
         <div><span class="sg-tag dark">Today</span>${mdList(d.today)}</div></div>
-        <p class="ai-sg" style="margin-top:12px"><span class="sg-tag dark">MUनीम's note</span>${d.note||''}</p>`;
-    }catch(e){const b=document.getElementById('aiBody');if(b)b.innerHTML='Live insight unavailable right now.';}
+      <p class="ai-sg" style="margin-top:12px"><span class="sg-tag dark">MUनीम's note</span>${d.note||''}</p>`;
     return;
   }
-  if((LIVE.pods||{})[v]){
+  const d=(LIVE.insights.pods||{})[v];
+  if(d){
     const host=document.querySelector('.munim .munim-body');if(!host)return;
-    host.innerHTML='<p style="color:var(--muted)">MUनीम is reading '+((PODS[v]||{}).name||v)+'’s live numbers…</p>';
-    const key='pod:'+v+':'+state.range;
-    try{
-      if(!_aiCache[key])_aiCache[key]=await (await fetch('/api/insights/pod/'+encodeURIComponent(v)+'?days='+liveDays())).json();
-      const d=_aiCache[key];
-      host.innerHTML=`<div><span class="sg-tag" style="background:var(--good);color:#fff">Wins</span>${mdList(d.wins)}</div>
-        <div style="margin-top:9px"><span class="sg-tag" style="background:var(--bad);color:#fff">Risks</span>${mdList(d.risks)}</div>
-        <p class="munim-sg" style="margin-top:9px"><span class="sg-tag">Munim suggests</span>${String(d.action||'').replace(/^[-*•]\s*/,'').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}</p>`;
-    }catch(e){}
-    return;
+    host.innerHTML=`<div><span class="sg-tag" style="background:var(--good);color:#fff">Wins</span>${mdList(d.wins)}</div>
+      <div style="margin-top:9px"><span class="sg-tag" style="background:var(--bad);color:#fff">Risks</span>${mdList(d.risks)}</div>
+      <p class="munim-sg" style="margin-top:9px"><span class="sg-tag">Munim suggests</span>${String(d.action||'').replace(/^[-*•]\s*/,'').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}</p>`;
   }
 }
 const BLOCKS=[

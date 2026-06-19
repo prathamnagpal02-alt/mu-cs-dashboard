@@ -40,3 +40,4 @@ desktop.ini
 
 # Streamlit local config (deploy-time secrets go in cloud, not here)
 .streamlit/secrets.toml
+.cohesivity
