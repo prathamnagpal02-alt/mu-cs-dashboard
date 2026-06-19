@@ -613,6 +613,9 @@ body{font-family:var(--sans);font-weight:400;color:var(--ink);background:var(--p
   .panel{padding:20px 18px}
   .hero{margin-bottom:22px}
 }
+.ig-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-top:4px}
+.ig-card{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.ig-card iframe{width:100%;height:540px;display:block;border:0}
 </style>
 </head>
 <body>
@@ -838,6 +841,14 @@ const state={view:'fieldguide',range:'30D',rangeLabel:'Last 30 days',navOpen:{di
    Fetches real numbers from munim_api.py. Any card we have live data for is
    served real; everything else falls back to the sample generator untouched. */
 let LIVE={};
+/* Instagram reels to feature per pod, by shortcode (the bit after /reel/ or /p/).
+   builders.mu → https://www.instagram.com/builders.mu/  — drop reel shortcodes here,
+   or let the live feed (LIVE.pods[id].ig_reels) supply them once the IG account is connected. */
+const IG_REELS={builders:[]};
+function igReelsFor(id){
+  const live=isLive()&&LIVE.pods&&LIVE.pods[id]&&LIVE.pods[id].ig_reels;
+  return (live&&live.length)?live:(IG_REELS[id]||[]);
+}
 const RANGE_DAYS={'7D':7,'30D':30,'90D':90,'QTD':90};
 function liveDays(){return RANGE_DAYS[state.range]||30;}
 async function fetchLive(){
@@ -1536,11 +1547,41 @@ function podGalleryBody(p,id){
      </div>
      <span class="ghost svg">${GLYPH[p.video?'play':isSocial?'phone':'camera']}</span>
    </div>
+   ${igGalleryHtml(p,id)}
    <div class="panel"><div class="panel-head"><div><div class="panel-title">Snapshots</div><div class="panel-sub">What this ${isSocial?'feed':'channel'} looks like</div></div><span class="panel-tag">Gallery</span></div>
      <div class="${gridClass}">${tiles}</div>
      <p class="note">Placeholder tiles. Drop the real ${isSocial?'Instagram grid screenshots':'YouTube thumbnails'} and brand mark in here and they slot straight into the layout.</p></div>`;
 }
+function igGalleryHtml(p,id){
+  const reels=igReelsFor(id);
+  const handle=(p.where.match(/@([\w.]+)/)||[])[1]||'';
+  const profileUrl=handle?('https://www.instagram.com/'+handle+'/'):'';
+  if(reels.length){
+    const embeds=reels.map(code=>`<div class="ig-card"><iframe src="https://www.instagram.com/reel/${code}/embed/" loading="lazy" frameborder="0" scrolling="no" allowtransparency="true" allow="encrypted-media"></iframe></div>`).join('');
+    return `<div class="panel"><div class="panel-head"><div><div class="panel-title">Latest from Instagram</div><div class="panel-sub">${handle?'@'+handle:'Reels'} · live embeds</div></div><span class="panel-tag" style="border-color:var(--good);color:var(--good)">Live</span></div>
+      <div class="ig-grid">${embeds}</div>
+      ${profileUrl?`<p class="note">Pulled from <a href="${profileUrl}" target="_blank" rel="noopener">${profileUrl}</a>. Add or reorder reels in the IG_REELS list.</p>`:''}</div>`;
+  }
+  if(id==='builders'||p.type==='social'){
+    return `<div class="panel"><div class="panel-head"><div><div class="panel-title">Latest from Instagram</div><div class="panel-sub">${handle?'@'+handle:'Reels'}</div></div><span class="panel-tag">Setup</span></div>
+      <p class="note" style="margin:4px 0 0">No reels wired in yet.${profileUrl?` Open <a href="${profileUrl}" target="_blank" rel="noopener">${profileUrl}</a>, copy a reel's link (Share → Copy link), and it gets embedded here as a real, playable video. Connect the Instagram account to pull them automatically.`:''}</p></div>`;
+  }
+  return '';
+}
 function podProjectsBody(p,id){
+  if(isLive()&&LIVE.pods&&LIVE.pods[id]){
+    const pod=LIVE.pods[id];const items=pod.recent||[];const sc=pod.status_counts||{};
+    const order=['Live','Delivered','Delivered, Awaiting Upload','In Editing','Shot, Awaiting Edit','Pre-production / Ideation'];
+    const chips=order.filter(k=>sc[k]).map(k=>`<span class="status-pill ${k==='Live'||k==='Delivered'?'live':'build'}"><span class="d"></span>${k}: ${sc[k]}</span>`).join(' ');
+    const cards=items.map(it=>{const live=it.status==='Live'||it.status==='Delivered';
+      const foot=[it.lead?'Owner · '+it.lead:'',it.shoot_date?'Shot · '+String(it.shoot_date).trim():'',it.planned_delivery?'Planned · '+String(it.planned_delivery).trim():'',it.upload?'Uploaded · '+String(it.upload).trim():''].filter(Boolean).join('   ·   ');
+      return `<div class="proj"><div class="proj-top"><div class="proj-name">${it.name}</div><span class="status-pill ${live?'live':'build'}"><span class="d"></span>${it.status}</span></div>
+        <div class="proj-foot">${foot||('Part of '+p.name)}</div></div>`;}).join('');
+    return `<div class="panel"><div class="panel-head"><div><div class="panel-title">Project Updates</div><div class="panel-sub">Live from the ${p.name} sheet · what the pod is working on right now</div></div><span class="panel-tag" style="border-color:var(--good);color:var(--good)">Live</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 14px">${chips||''}</div>
+      <div class="proj-grid">${cards||'<p class="note">No active items in this window. Widen the date range to see more.</p>'}</div>
+      <p class="note" style="margin-top:14px">Updates stream live from the ${p.name} production sheet via Cohesivity. Refreshed ${isLive()?new Date(LIVE.generated_at).toLocaleString('en-GB'):''}.</p></div>`;
+  }
   const r=seed(id+'proj');const names=PROJ[id]||Array.from({length:4},(_,i)=>`${p.name} · set ${String.fromCharCode(65+i)}`);
   const unit={social:'Reach',perf:'Applications',influencer:'Reach',pr:'Pickups',newsletter:'Opens'}[p.type]||'Views';
   const stArr=['Live','In edit','Planned','Live','Shooting'];

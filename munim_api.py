@@ -373,7 +373,7 @@ def pod_operations(tab, rows_in_range, start=None, today=None):
     }
 
 
-def _recent_videos(tab, rows, limit=6):
+def _recent_videos(tab, rows, limit=14):
     out = []
     for d in rows:
         out.append({

@@ -138,6 +138,16 @@ def main():
         if not NO_AI:
             print(f"  overall AI for {days}d...")
             tray["insights"] = {"overall": overall_insight(tray), "pods": pod_ins}
+        else:
+            # data-only refresh: keep the AI insights already in the cache
+            try:
+                ex = sql("SELECT payload->'insights' AS ins FROM munim_cache WHERE days=$1", [days])
+                rows = ex.get("rows", [])
+                if rows and rows[0].get("ins"):
+                    tray["insights"] = rows[0]["ins"]
+                    print(f"  kept existing AI insights for {days}d")
+            except Exception as e:
+                print(f"  (could not carry insights: {e})")
         sql("INSERT INTO munim_cache (days, payload, generated_at) VALUES ($1, $2, $3) "
             "ON CONFLICT (days) DO UPDATE SET payload = EXCLUDED.payload, "
             "generated_at = EXCLUDED.generated_at",
