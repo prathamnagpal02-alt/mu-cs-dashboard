@@ -616,6 +616,18 @@ body{font-family:var(--sans);font-weight:400;color:var(--ink);background:var(--p
 .ig-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-top:4px}
 .ig-card{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.03)}
 .ig-card iframe{width:100%;height:540px;display:block;border:0}
+.pu-chips{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 18px}
+.pu-chip{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;padding:5px 10px;border-radius:100px;border:1px solid var(--line);color:var(--ink-2);text-transform:uppercase}
+.pu-chip.live{border-color:var(--good);color:var(--good)}
+.pu-timeline{position:relative}
+.pu-row{display:flex;gap:14px;padding-bottom:18px;position:relative}
+.pu-row:not(:last-child)::before{content:"";position:absolute;left:5px;top:15px;bottom:-3px;width:2px;background:var(--line-soft)}
+.pu-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0;margin-top:4px;background:var(--muted-2);z-index:1;box-shadow:0 0 0 3px var(--card)}
+.pu-dot.live{background:var(--good)}.pu-dot.build{background:var(--orange)}
+.pu-bd{flex:1;min-width:0}
+.pu-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pu-name{font-weight:600;font-size:14px;color:var(--ink)}
+.pu-meta{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:3px;letter-spacing:.02em}
 </style>
 </head>
 <body>
@@ -1568,20 +1580,21 @@ function igGalleryHtml(p,id){
   }
   return '';
 }
+function projectUpdatesHtml(p,id){
+  if(!(isLive()&&LIVE.pods&&LIVE.pods[id]))return '';
+  const pod=LIVE.pods[id];const items=pod.recent||[];const sc=pod.status_counts||{};
+  const order=['Live','Delivered','Delivered, Awaiting Upload','In Editing','Shot, Awaiting Edit','Pre-production / Ideation'];
+  const chips=order.filter(k=>sc[k]).map(k=>`<span class="pu-chip ${k==='Live'||k==='Delivered'?'live':'build'}">${k} · ${sc[k]}</span>`).join('');
+  const rows=items.map(it=>{const live=it.status==='Live'||it.status==='Delivered';
+    const meta=[it.lead?'Owner '+it.lead:'',it.shoot_date?'Shot '+String(it.shoot_date).trim():'',it.planned_delivery?'Planned '+String(it.planned_delivery).trim():'',it.upload?'Uploaded '+String(it.upload).trim():''].filter(Boolean).join('   ·   ');
+    return `<div class="pu-row"><div class="pu-dot ${live?'live':'build'}"></div><div class="pu-bd"><div class="pu-top"><span class="pu-name">${it.name}</span><span class="status-pill ${live?'live':'build'}"><span class="d"></span>${it.status}</span></div><div class="pu-meta">${meta||('Part of '+p.name)}</div></div></div>`;}).join('');
+  return `<div class="panel-row full"><div class="panel"><div class="panel-head"><div><div class="panel-title">Project Updates</div><div class="panel-sub">Live timeline from the ${p.name} sheet · what the pod is working on right now</div></div><span class="panel-tag" style="border-color:var(--good);color:var(--good)">Live</span></div>
+    <div class="pu-chips">${chips}</div>
+    <div class="pu-timeline">${rows||'<p class="note">No active items in this window. Widen the date range to see more.</p>'}</div>
+    <p class="note" style="margin-top:6px">Streams live from the ${p.name} production sheet via Cohesivity. Refreshed ${new Date(LIVE.generated_at).toLocaleString('en-GB')}.</p></div></div>`;
+}
 function podProjectsBody(p,id){
-  if(isLive()&&LIVE.pods&&LIVE.pods[id]){
-    const pod=LIVE.pods[id];const items=pod.recent||[];const sc=pod.status_counts||{};
-    const order=['Live','Delivered','Delivered, Awaiting Upload','In Editing','Shot, Awaiting Edit','Pre-production / Ideation'];
-    const chips=order.filter(k=>sc[k]).map(k=>`<span class="status-pill ${k==='Live'||k==='Delivered'?'live':'build'}"><span class="d"></span>${k}: ${sc[k]}</span>`).join(' ');
-    const cards=items.map(it=>{const live=it.status==='Live'||it.status==='Delivered';
-      const foot=[it.lead?'Owner · '+it.lead:'',it.shoot_date?'Shot · '+String(it.shoot_date).trim():'',it.planned_delivery?'Planned · '+String(it.planned_delivery).trim():'',it.upload?'Uploaded · '+String(it.upload).trim():''].filter(Boolean).join('   ·   ');
-      return `<div class="proj"><div class="proj-top"><div class="proj-name">${it.name}</div><span class="status-pill ${live?'live':'build'}"><span class="d"></span>${it.status}</span></div>
-        <div class="proj-foot">${foot||('Part of '+p.name)}</div></div>`;}).join('');
-    return `<div class="panel"><div class="panel-head"><div><div class="panel-title">Project Updates</div><div class="panel-sub">Live from the ${p.name} sheet · what the pod is working on right now</div></div><span class="panel-tag" style="border-color:var(--good);color:var(--good)">Live</span></div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 14px">${chips||''}</div>
-      <div class="proj-grid">${cards||'<p class="note">No active items in this window. Widen the date range to see more.</p>'}</div>
-      <p class="note" style="margin-top:14px">Updates stream live from the ${p.name} production sheet via Cohesivity. Refreshed ${isLive()?new Date(LIVE.generated_at).toLocaleString('en-GB'):''}.</p></div>`;
-  }
+  if(isLive()&&LIVE.pods&&LIVE.pods[id])return projectUpdatesHtml(p,id);
   const r=seed(id+'proj');const names=PROJ[id]||Array.from({length:4},(_,i)=>`${p.name} · set ${String.fromCharCode(65+i)}`);
   const unit={social:'Reach',perf:'Applications',influencer:'Reach',pr:'Pickups',newsletter:'Opens'}[p.type]||'Views';
   const stArr=['Live','In edit','Planned','Live','Shooting'];
@@ -1656,6 +1669,7 @@ function renderPod(id){
           <div class="panel"><div class="panel-head"><div><div class="panel-title">${model.trendLabel} trend</div><div class="panel-sub">${p.name} · ${r}</div></div><span class="panel-tag">${model.trendLabel}</span></div><div class="chart-wrap"><canvas id="podTrend"></canvas></div></div>
           ${teamHtml}
         </div>
+        ${projectUpdatesHtml(p,id)}
         <div class="panel-row full"><div class="panel">${ghost}<div class="panel-head"><div><div class="panel-title">Gallery preview</div><div class="panel-sub">A peek at what ${p.name} looks like</div></div><span class="panel-tag" data-tab2="gallery" style="cursor:pointer">Open gallery →</span></div><div class="gal-grid yt">${t}</div></div></div>`;
       init=()=>{charts.push(lineChart(document.getElementById('podTrend').getContext('2d'),model.L,model.trend,model.trendLabel,C.cyan));};
     }
