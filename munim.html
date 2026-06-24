@@ -868,8 +868,10 @@ let LIVE={};
    or let the live feed (LIVE.pods[id].ig_reels) supply them once the IG account is connected. */
 const IG_REELS={builders:[]};
 function igReelsFor(id){
-  const live=isLive()&&LIVE.pods&&LIVE.pods[id]&&LIVE.pods[id].ig_reels;
-  return (live&&live.length)?live:(IG_REELS[id]||[]);
+  const pod=isLive()&&LIVE.pods&&LIVE.pods[id];
+  const live=pod&&(pod.gallery_reels||pod.ig_reels);
+  const list=(live&&live.length)?live:(IG_REELS[id]||[]);
+  return [...new Set(list)];   // de-dupe shortcodes, keep order
 }
 const RANGE_DAYS={'7D':7,'30D':30,'90D':90,'QTD':90};
 function liveDays(){return RANGE_DAYS[state.range]||30;}
@@ -1581,7 +1583,7 @@ function podGalleryBody(p,id){
      <p class="note">Placeholder tiles. Drop the real ${isSocial?'Instagram grid screenshots':'YouTube thumbnails'} and brand mark in here and they slot straight into the layout.</p></div>`;
 }
 function igGalleryHtml(p,id){
-  const reels=igReelsFor(id);
+  const reels=igReelsFor(id).slice(0,12);
   const handle=(p.where.match(/@([\w.]+)/)||[])[1]||'';
   const profileUrl=handle?('https://www.instagram.com/'+handle+'/'):'';
   if(reels.length){
@@ -1612,7 +1614,8 @@ function projectUpdatesHtml(p,id){
     const people=[it.shoot_lead?'Shoot: '+it.shoot_lead:'',it.crew?'Crew: '+it.crew:'',it.editor?'Editor: '+it.editor:'',(!it.editor&&it.editing_team)?'Edit: '+it.editing_team:''].filter(Boolean).map(esc).join('   ·   ');
     const track=dateTrack(it);
     const note=it.last_update||it.remarks;
-    const link=it.upload_link&&/^https?:/i.test(it.upload_link)?`<a class="pu-link" href="${it.upload_link}" target="_blank" rel="noopener">Open ↗</a>`:'';
+    const url=it.reel_url||(/^https?:/i.test(it.upload_link)?it.upload_link:'');
+    const link=url?`<a class="pu-link" href="${url}" target="_blank" rel="noopener">Reel ↗</a>`:'';
     return `<div class="pu-row"><div class="pu-dot ${cls}"></div><div class="pu-bd">
       <div class="pu-top"><span class="pu-name">${esc(it.name)}</span><span class="status-pill ${cls}"><span class="d"></span>${esc(it.status)}</span>${link}</div>
       ${tags?`<div class="pu-tags">${tags}</div>`:''}

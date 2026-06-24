@@ -43,6 +43,8 @@ load_dotenv(Path(__file__).parent / ".env")
 DATABASE_URL = os.environ["DATABASE_URL"]
 HTML_FILE = Path(__file__).parent / "munim.html"
 PORT = int(os.environ.get("MUNIM_PORT", "8787"))
+CS_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
+GOOGLE_CREDS = os.environ.get("GOOGLE_CREDENTIALS_PATH", "")
 
 # ── Sheet IDs (mirror snapshot_all.py) ──────────────────────────────────────
 COVERAGE_SHEET_ID = "14GfWMoxVUjFVmvEan5c_-CDzBh-qIuujgsW8Z_m1pUM"
@@ -382,6 +384,65 @@ def _is_real_row(d):
     return bool(_g(d, "Video Name")) or bool(_g(d, "Status of Delivery"))
 
 
+# ── reel URLs: pulled from the sheet's Upload Link hyperlinks (rich-text links) ──
+_reel_cache = {}            # tab -> (timestamp, {video_name: url})
+REEL_TTL = 3600
+_SHORTCODE = re.compile(r"instagram\.com/(?:reel|p|tv)/([A-Za-z0-9_-]+)", re.I)
+
+
+def reel_shortcode(url):
+    m = _SHORTCODE.search(url or "")
+    return m.group(1) if m else None
+
+
+def reel_links(tab):
+    """{Video Name: instagram_url} read from the tab's Upload Link hyperlinks.
+    Returns {} silently if Google creds are unavailable (e.g. on a server
+    without the service account)."""
+    hit = _reel_cache.get(tab)
+    if hit and time.time() - hit[0] < REEL_TTL:
+        return hit[1]
+    out = {}
+    if not (CS_SHEET_ID and GOOGLE_CREDS and os.path.exists(GOOGLE_CREDS)):
+        return out
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        creds = Credentials.from_service_account_file(
+            GOOGLE_CREDS, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+        gc = gspread.authorize(creds)
+        from urllib.parse import quote
+        rng = quote("'" + tab.replace("'", "''") + "'")   # A1 sheet names with spaces need quoting
+        url = (f"https://sheets.googleapis.com/v4/spreadsheets/{CS_SHEET_ID}"
+               f"?ranges={rng}&fields=sheets(data(rowData(values(formattedValue,hyperlink))))")
+        resp = gc.http_client.request("get", url)
+        grid = resp.json()["sheets"][0]["data"][0].get("rowData", [])
+        # locate header row + the Video Name / Upload Link columns
+        rows = [[(v or {}) for v in (r.get("values") or [])] for r in grid]
+        hdr_idx = max(range(min(6, len(rows))),
+                      key=lambda i: sum(1 for c in rows[i] if c.get("formattedValue")), default=0)
+        header = [c.get("formattedValue", "") for c in rows[hdr_idx]]
+
+        def col(name):
+            return header.index(name) if name in header else -1
+        name_c, link_c = col("Video Name"), col("Upload Link")
+        if name_c < 0 or link_c < 0:
+            return out
+        for r in rows[hdr_idx + 1:]:
+            if name_c >= len(r) or link_c >= len(r):
+                continue
+            nm = r[name_c].get("formattedValue", "").strip()
+            cell = r[link_c]
+            link = cell.get("hyperlink") or (cell.get("formattedValue", "")
+                                             if "instagram.com" in cell.get("formattedValue", "") else "")
+            if nm and link and "instagram.com" in link:
+                out[nm] = link
+    except Exception as e:
+        print(f"  reel_links({tab}) skipped: {e}")
+    _reel_cache[tab] = (time.time(), out)
+    return out
+
+
 def pod_operations(tab, all_rows, win_rows, start=None, today=None):
     upload_cols = PODS[tab]["upload_cols"]
     has_upload = bool(upload_cols)
@@ -509,6 +570,19 @@ def _build_data_inner(days):
         all_rows = fetch_latest_rows(tab)
         win_rows = [r for r in all_rows if in_range(r, start, today, cols)]
         ops = pod_operations(tab, all_rows, win_rows, start, today)
+        # attach real Instagram reel URLs from the sheet's Upload Link hyperlinks
+        links = reel_links(tab)
+        if links:
+            reels = []
+            for it in ops["items"]:
+                u = links.get(it["name"])
+                if u:
+                    it["reel_url"] = u
+                    code = reel_shortcode(u)
+                    if code:
+                        it["reel_code"] = code
+                        reels.append(code)
+            ops["gallery_reels"] = reels
         if ops["munim_id"]:
             pods[ops["munim_id"]] = ops
         sc = ops["win_status_counts"]
