@@ -638,6 +638,35 @@ body{font-family:var(--sans);font-weight:400;color:var(--ink);background:var(--p
 .pu-arrow{color:var(--muted-2)}
 .pu-meta{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:5px;letter-spacing:.02em}
 .pu-note{font-size:12px;color:var(--ink-2);margin-top:6px;font-style:italic;line-height:1.5}
+.pu-perf-row{margin-top:6px}
+.pu-perf{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--cyan-deep);letter-spacing:.02em}
+/* Instagram stats */
+.ig-stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px;margin:4px 0 18px}
+.ig-stat{background:var(--card-hi);border:1px solid var(--line);border-radius:12px;padding:16px 14px}
+.ig-stat-v{font-family:var(--sans);font-weight:800;font-size:26px;letter-spacing:-.02em;color:var(--ink)}
+.ig-stat-l{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-top:5px}
+.ig-top-h{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-2);margin:4px 0 8px}
+.ig-top-row{display:flex;align-items:center;gap:12px;padding:9px 10px;border-radius:9px;text-decoration:none;color:var(--ink);transition:background .12s}
+.ig-top-row:hover{background:var(--paper-2)}
+.ig-rank{font-family:var(--sans);font-weight:800;color:var(--cyan);width:18px;flex-shrink:0}
+.ig-top-cap{flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ig-top-v{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--ink)}
+.ig-top-l{font-family:var(--mono);font-size:10.5px;color:var(--muted);min-width:78px;text-align:right}
+/* CPV */
+.cpv-big{font-family:var(--sans);font-weight:800;font-size:52px;letter-spacing:-.03em;color:var(--ink);margin:8px 0 4px}
+.cpv-unit{font-size:17px;font-weight:600;color:var(--muted)}
+.cpv-bar{height:10px;border-radius:6px;background:var(--line-soft);overflow:hidden;margin:8px 0 7px}
+.cpv-fill{height:100%;border-radius:6px}
+.cpv-legend{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:16px}
+.cpv-meta{display:grid;grid-template-columns:1fr 1fr;gap:14px;border-top:1px solid var(--line-soft);padding-top:14px}
+.cpv-m-v{font-family:var(--sans);font-weight:800;font-size:22px;color:var(--ink)}
+.cpv-m-l{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:4px}
+.mbars{display:flex;flex-direction:column;gap:9px;padding-top:4px}
+.mbar{display:flex;align-items:center;gap:10px}
+.mbar-k{font-family:var(--mono);font-size:10px;color:var(--muted);width:54px;flex-shrink:0}
+.mbar-track{flex:1;height:9px;background:var(--line-soft);border-radius:5px;overflow:hidden}
+.mbar-fill{height:100%;background:var(--cyan);border-radius:5px}
+.mbar-v{font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--ink-2);width:64px;text-align:right;flex-shrink:0}
 </style>
 </head>
 <body>
@@ -904,12 +933,22 @@ function liveModel(id){
   let donutData=Object.keys(sc).sort((a,b)=>(order.indexOf(a)+99)%100-(order.indexOf(b)+99)%100).map(k=>[k,sc[k]]);
   if(!donutData.length)donutData=[['No items',1]];
   const flat='<span class="flat">whole pod</span>';
-  const kpis=[
-    {l:'Total videos',v:p.total||0,d:0,c:'',dtext:flat},
-    {l:'Uploaded',v:p.uploaded||0,d:0,c:'k',dtext:flat},
-    {l:'In progress',v:p.in_progress||0,d:0,c:'o',dtext:flat},
-    {l:'Tanked',v:p.tanked||0,d:0,c:'y',dtext:flat}
-  ];
+  let kpis;
+  if(p.insta){const ig=p.insta,cv=p.cpv;
+    kpis=[
+      {l:'Followers',v:fmt(ig.followers),d:0,c:'',dtext:'<span class="flat">@'+ig.handle+'</span>'},
+      {l:'Total views',v:fmt(ig.total_views),d:0,c:'k',dtext:'<span class="flat">'+ig.reels_count+' reels</span>'},
+      {l:'Engagement',v:ig.engagement_rate+'%',d:0,c:'o',dtext:'<span class="flat">likes+comments / views</span>'},
+      {l:'Cost / view',v:cv?('₹'+cv.cpv.toFixed(3)):'—',d:0,c:'y',dtext:cv?('<span class="'+(cv.cpv<=cv.target_short?'up':'down')+'">target ₹'+cv.target_short.toFixed(2)+'</span>'):flat}
+    ];
+  } else {
+    kpis=[
+      {l:'Total videos',v:p.total||0,d:0,c:'',dtext:flat},
+      {l:'Uploaded',v:p.uploaded||0,d:0,c:'k',dtext:flat},
+      {l:'In progress',v:p.in_progress||0,d:0,c:'o',dtext:flat},
+      {l:'Tanked',v:p.tanked||0,d:0,c:'y',dtext:flat}
+    ];
+  }
   const series=(p.series&&p.series.length)?p.series:[0];
   const labels=(p.series_labels&&p.series_labels.length)?p.series_labels:series.map((_,i)=>'W'+(i+1));
   const items=p.items||[];
@@ -1598,6 +1637,30 @@ function igGalleryHtml(p,id){
   }
   return '';
 }
+function instaStatsHtml(p,id){
+  const ig=isLive()&&LIVE.pods&&LIVE.pods[id]&&LIVE.pods[id].insta;if(!ig)return '';
+  const tiles=[['Followers',fmt(ig.followers)],['Total views',fmt(ig.total_views)],['Total likes',fmt(ig.total_likes)],['Comments',fmt(ig.total_comments)],['Avg views / reel',fmt(ig.avg_views)],['Engagement',ig.engagement_rate+'%']];
+  const esc=s=>String(s||'').replace(/</g,'&lt;');
+  const top=(ig.top||[]).map((r,i)=>`<a class="ig-top-row" href="${r.url}" target="_blank" rel="noopener"><span class="ig-rank">${i+1}</span><span class="ig-top-cap">${esc(r.caption)||'Reel'}</span><span class="ig-top-v">${fmt(r.views)} views</span><span class="ig-top-l">${fmt(r.likes)} likes</span></a>`).join('');
+  return `<div class="panel-row full"><div class="panel">
+    <div class="panel-head"><div><div class="panel-title">Overall Instagram Stats</div><div class="panel-sub">@${ig.handle} · ${ig.reels_count} reels · scraped ${new Date(ig.scraped_at).toLocaleDateString('en-GB')}</div></div><span class="panel-tag" style="border-color:var(--good);color:var(--good)">Live</span></div>
+    <div class="ig-stat-grid">${tiles.map(t=>`<div class="ig-stat"><div class="ig-stat-v">${t[1]}</div><div class="ig-stat-l">${t[0]}</div></div>`).join('')}</div>
+    <div class="ig-top"><div class="ig-top-h">Top reels by views</div>${top}</div></div></div>`;
+}
+function cpvHtml(p,id){
+  const c=isLive()&&LIVE.pods&&LIVE.pods[id]&&LIVE.pods[id].cpv;if(!c||c.cpv==null)return '';
+  const under=c.cpv<=c.target_short;
+  const ratio=Math.max(.04,Math.min(1,c.cpv/c.target_short));
+  const months=Object.entries(c.by_month||{});const maxM=Math.max(1,...months.map(m=>m[1]));
+  const mbars=months.map(([k,v])=>`<div class="mbar"><div class="mbar-k">${k}</div><div class="mbar-track"><div class="mbar-fill" style="width:${Math.round(v/maxM*100)}%"></div></div><div class="mbar-v">${rupee(v)}</div></div>`).join('')||'<p class="note">No dated expenses.</p>';
+  return `<div class="panel-row two">
+    <div class="panel"><div class="panel-head"><div><div class="panel-title">CPV · Cost per view</div><div class="panel-sub">${c.tag} spend ÷ total views</div></div><span class="panel-tag" style="border-color:${under?'var(--good)':'var(--bad)'};color:${under?'var(--good)':'var(--bad)'}">${under?'Under target':'Over target'}</span></div>
+      <div class="cpv-big">₹${c.cpv.toFixed(3)}<span class="cpv-unit"> / view</span></div>
+      <div class="cpv-bar"><div class="cpv-fill" style="width:${Math.round(ratio*100)}%;background:${under?'var(--good)':'var(--bad)'}"></div></div>
+      <div class="cpv-legend"><span>Das Paisa target ₹${c.target_short.toFixed(2)} (short)</span><span>${under?(c.target_short/c.cpv).toFixed(1)+'× better':''}</span></div>
+      <div class="cpv-meta"><div><div class="cpv-m-v">${rupee(c.cost)}</div><div class="cpv-m-l">Spend · ${c.count} entries</div></div><div><div class="cpv-m-v">${fmt(c.views)}</div><div class="cpv-m-l">Total views</div></div></div></div>
+    <div class="panel"><div class="panel-head"><div><div class="panel-title">Spend by month</div><div class="panel-sub">Builders.mu content expenses</div></div></div><div class="mbars">${mbars}</div></div></div>`;
+}
 function projectUpdatesHtml(p,id){
   if(!(isLive()&&LIVE.pods&&LIVE.pods[id]))return '';
   const pod=LIVE.pods[id];const items=pod.items||[];const sc=pod.status_counts||{};
@@ -1610,6 +1673,7 @@ function projectUpdatesHtml(p,id){
   };
   const rows=items.map(it=>{
     const cls=statusClass(it.status);
+    const perf=it.views?`<span class="pu-perf">▶ ${fmt(it.views)} views · ${fmt(it.likes||0)} likes · ${fmt(it.comments||0)} comments</span>`:'';
     const tags=[it.type,it.format,it.tat?('TAT '+it.tat):''].filter(Boolean).map(t=>`<span class="pu-tag">${esc(t)}</span>`).join('');
     const people=[it.shoot_lead?'Shoot: '+it.shoot_lead:'',it.crew?'Crew: '+it.crew:'',it.editor?'Editor: '+it.editor:'',(!it.editor&&it.editing_team)?'Edit: '+it.editing_team:''].filter(Boolean).map(esc).join('   ·   ');
     const track=dateTrack(it);
@@ -1618,6 +1682,7 @@ function projectUpdatesHtml(p,id){
     const link=url?`<a class="pu-link" href="${url}" target="_blank" rel="noopener">Reel ↗</a>`:'';
     return `<div class="pu-row"><div class="pu-dot ${cls}"></div><div class="pu-bd">
       <div class="pu-top"><span class="pu-name">${esc(it.name)}</span><span class="status-pill ${cls}"><span class="d"></span>${esc(it.status)}</span>${link}</div>
+      ${perf?`<div class="pu-perf-row">${perf}</div>`:''}
       ${tags?`<div class="pu-tags">${tags}</div>`:''}
       ${track?`<div class="pu-track">${track}</div>`:''}
       ${people?`<div class="pu-meta">${people}</div>`:''}
@@ -1704,6 +1769,8 @@ function renderPod(id){
           <div class="panel"><div class="panel-head"><div><div class="panel-title">${model.trendLabel} trend</div><div class="panel-sub">${p.name} · ${r}</div></div><span class="panel-tag">${model.trendLabel}</span></div><div class="chart-wrap"><canvas id="podTrend"></canvas></div></div>
           ${teamHtml}
         </div>
+        ${instaStatsHtml(p,id)}
+        ${cpvHtml(p,id)}
         ${projectUpdatesHtml(p,id)}
         <div class="panel-row full"><div class="panel">${ghost}<div class="panel-head"><div><div class="panel-title">Gallery preview</div><div class="panel-sub">A peek at what ${p.name} looks like</div></div><span class="panel-tag" data-tab2="gallery" style="cursor:pointer">Open gallery →</span></div><div class="gal-grid yt">${t}</div></div></div>`;
       init=()=>{charts.push(lineChart(document.getElementById('podTrend').getContext('2d'),model.L,model.trend,model.trendLabel,C.cyan));};

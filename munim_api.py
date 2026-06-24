@@ -48,8 +48,17 @@ GOOGLE_CREDS = os.environ.get("GOOGLE_CREDENTIALS_PATH", "")
 
 # ── Sheet IDs (mirror snapshot_all.py) ──────────────────────────────────────
 COVERAGE_SHEET_ID = "14GfWMoxVUjFVmvEan5c_-CDzBh-qIuujgsW8Z_m1pUM"
+SALARIES_SHEET_ID = "1eok2NGU7gzhM7sGraFcyeqO-AMyyQXzj4AxhV-bXUrw"
 NEWSLETTERS_SHEET_ID = "1HXFklF6_RJ3L_lSDe0AUr1xdxKQ-c9ngYvvUosyFI94"
 ORM_SHEET_ID = "1kBFoCe28vrkVqnaRyn3dqNxBs_KSZf8MuZcpVp_vAXE"
+
+# pod id -> Instagram handle (extend as we connect more accounts)
+POD_IG = {"builders": "builders.mu"}
+# pod id -> the Content-Expenses "Pod" dropdown label(s) to sum for CPV cost
+POD_EXPENSE_TAG = {"builders": "builders.mu"}   # matches "Builders.mu / Student Stories"
+IG_CACHE_DIR = Path(__file__).parent / "ig_cache"
+CPV_TARGET_SHORT = 0.10   # Das Paisa: short form
+CPV_TARGET_LONG = 1.0     # long form
 INFLUENCER_SHEET_ID = "1RCMD8DHsIVBnwrIfl_2qgvt0LQZaUG2eoDFLwwuHano"
 
 # ── Production pods (mirror mcp_server.py / dashboard.py) ────────────────────
@@ -532,6 +541,99 @@ def pod_operations(tab, all_rows, win_rows, start=None, today=None):
     }
 
 
+# ── Instagram stats (Apify scrape cache) + CPV from the expense sheet ────────
+def _money(s):
+    """'₹26,668.00' / 'Rs 5,631' -> float."""
+    s = re.sub(r"[^0-9.]", "", str(s or ""))
+    try:
+        return float(s) if s else 0.0
+    except ValueError:
+        return 0.0
+
+
+def load_ig_stats(handle):
+    path = IG_CACHE_DIR / (handle + ".json")
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def pod_expenses(tag_substr):
+    """Sum Content-Expenses rows whose 'Pod' dropdown contains tag_substr.
+    Returns total (with GST), count, and a month-by-month breakdown."""
+    rows = fetch_latest_rows("Content Expenses", SALARIES_SHEET_ID)
+    matched = [r for r in rows if tag_substr.lower() in str(r.get("Pod", "") or "").lower()]
+    total = sum(_money(r.get("Amount with GST")) for r in matched)
+    by_month = {}
+    for r in matched:
+        d = parse_date_str(r.get("Date of Incurring the Expense")) or \
+            parse_date_str(r.get("Date of Shoot")) or parse_date_str(r.get("Date of Payment"))
+        amt = _money(r.get("Amount with GST"))
+        if d:
+            key = d.strftime("%b %Y")
+            by_month[key] = by_month.get(key, 0) + amt
+    tag = matched[0].get("Pod", "").strip() if matched else tag_substr
+    return {"total": round(total), "count": len(matched), "by_month": by_month, "tag": tag}
+
+
+def build_insta(pod_id, items):
+    handle = POD_IG.get(pod_id)
+    if not handle:
+        return None
+    ig = load_ig_stats(handle)
+    if not ig or not ig.get("reels"):
+        return None
+    reels = ig["reels"]
+    by_code = {r["shortCode"]: r for r in reels}
+    total_views = sum(r["views"] for r in reels)
+    total_likes = sum(r["likes"] for r in reels)
+    total_comments = sum(r["comments"] for r in reels)
+    # merge per-reel performance into the project items (matched by shortcode)
+    matched = 0
+    for it in items:
+        r = by_code.get(it.get("reel_code"))
+        if r:
+            it["views"] = r["views"]
+            it["likes"] = r["likes"]
+            it["comments"] = r["comments"]
+            matched += 1
+    top = sorted(reels, key=lambda r: r["views"], reverse=True)[:5]
+    return {
+        "handle": handle,
+        "followers": ig.get("followers"),
+        "reels_count": len(reels),
+        "total_views": total_views,
+        "total_likes": total_likes,
+        "total_comments": total_comments,
+        "avg_views": round(total_views / len(reels)) if reels else 0,
+        "engagement_rate": round((total_likes + total_comments) / total_views * 100, 2) if total_views else None,
+        "matched_to_sheet": matched,
+        "scraped_at": ig.get("scraped_at"),
+        "top": [{"code": r["shortCode"], "views": r["views"], "likes": r["likes"],
+                 "comments": r["comments"], "url": r.get("url"), "caption": r.get("caption", "")} for r in top],
+    }
+
+
+def build_cpv(pod_id, insta):
+    if not insta or not insta.get("total_views"):
+        return None
+    tag = POD_EXPENSE_TAG.get(pod_id)
+    if not tag:
+        return None
+    exp = pod_expenses(tag)
+    views = insta["total_views"]
+    cpv = exp["total"] / views if views else None
+    return {
+        "cost": exp["total"], "views": views, "count": exp["count"], "tag": exp["tag"],
+        "cpv": round(cpv, 3) if cpv is not None else None,
+        "target_short": CPV_TARGET_SHORT, "target_long": CPV_TARGET_LONG,
+        "by_month": exp["by_month"],
+    }
+
+
 # ── the big tray: everything the dashboard needs in one fetch ───────────────
 _data_cache = {}      # days -> (timestamp, payload)
 DATA_TTL = 120        # seconds; sheets only refresh on snapshot anyway
@@ -583,6 +685,13 @@ def _build_data_inner(days):
                         it["reel_code"] = code
                         reels.append(code)
             ops["gallery_reels"] = reels
+        # Instagram performance (Apify) + CPV (expense sheet ÷ views)
+        mid = ops["munim_id"]
+        if mid and mid in POD_IG:
+            insta = build_insta(mid, ops["items"])
+            if insta:
+                ops["insta"] = insta
+                ops["cpv"] = build_cpv(mid, insta)
         if ops["munim_id"]:
             pods[ops["munim_id"]] = ops
         sc = ops["win_status_counts"]
