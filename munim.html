@@ -935,11 +935,14 @@ function liveModel(id){
   const flat='<span class="flat">whole pod</span>';
   let kpis;
   if(p.insta){const ig=p.insta,cv=p.cpv;
+    const fourth=(cv&&cv.cpv!=null)
+      ?{l:'Cost / view',v:'₹'+cv.cpv.toFixed(3),d:0,c:'y',dtext:'<span class="'+(cv.cpv<=cv.target_short?'up':'down')+'">'+(cv.scope==='all-time'?'all-time · ':state.range+' · ')+'target ₹'+cv.target_short.toFixed(2)+'</span>'}
+      :{l:'Engagement',v:ig.engagement_rate+'%',d:0,c:'y',dtext:'<span class="flat">likes+comments / views</span>'};
     kpis=[
       {l:'Followers',v:fmt(ig.followers),d:0,c:'',dtext:'<span class="flat">@'+ig.handle+' · current</span>'},
       {l:'Views',v:fmt(ig.total_views),d:0,c:'k',dtext:'<span class="flat">'+ig.reels_count+' reels · '+state.range+'</span>'},
       {l:'Likes',v:fmt(ig.total_likes),d:0,c:'o',dtext:'<span class="flat">'+state.range+'</span>'},
-      {l:'Cost / view',v:(cv&&cv.cpv!=null)?('₹'+cv.cpv.toFixed(3)):'—',d:0,c:'y',dtext:cv?('<span class="'+(cv.cpv<=cv.target_short?'up':'down')+'">'+(cv.scope==='all-time'?'all-time · ':state.range+' · ')+'target ₹'+cv.target_short.toFixed(2)+'</span>'):flat}
+      fourth
     ];
   } else {
     kpis=[

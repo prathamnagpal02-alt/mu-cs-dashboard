@@ -53,9 +53,11 @@ NEWSLETTERS_SHEET_ID = "1HXFklF6_RJ3L_lSDe0AUr1xdxKQ-c9ngYvvUosyFI94"
 ORM_SHEET_ID = "1kBFoCe28vrkVqnaRyn3dqNxBs_KSZf8MuZcpVp_vAXE"
 
 # pod id -> Instagram handle (extend as we connect more accounts)
-POD_IG = {"builders": "builders.mu"}
+POD_IG = {"builders": "builders.mu", "elevator": "elevatorpitch.mu"}
 # pod id -> the Content-Expenses "Pod" dropdown label(s) to sum for CPV cost
 POD_EXPENSE_TAG = {"builders": "builders.mu"}   # matches "Builders.mu / Student Stories"
+# IG-only pods with NO production sheet — their "projects" come from the reels.
+SOCIAL_PODS = {"elevator": {"name": "Elevator Pitch", "lead": "Anu Kiran"}}
 IG_CACHE_DIR = Path(__file__).parent / "ig_cache"
 CPV_TARGET_SHORT = 0.10   # Das Paisa: short form
 CPV_TARGET_LONG = 1.0     # long form
@@ -683,6 +685,63 @@ def build_cpv(pod_id, insta, start=None, today=None):
     }
 
 
+def build_social_pod(pod_id, start=None, today=None):
+    """An Instagram-only pod (no production sheet): its 'projects' are the reels
+    themselves, pulled from the Apify cache."""
+    handle = POD_IG.get(pod_id)
+    cfg = SOCIAL_PODS.get(pod_id, {})
+    ig = load_ig_stats(handle) if handle else None
+    if not ig or not ig.get("reels"):
+        return None
+    reels = sorted(ig["reels"], key=lambda r: (r.get("timestamp") or ""), reverse=True)
+    items = []
+    for r in reels:
+        d = _reel_date(r)
+        cap = (r.get("caption") or "").strip().split("\n")[0][:70] or ("Reel " + r["shortCode"])
+        items.append({
+            "name": cap, "status": "Uploaded", "type": (r.get("product_type") or "Reel"),
+            "format": "", "shoot_status": "", "delivery_status": "Uploaded",
+            "shoot_lead": "", "crew": "", "editor": "", "editing_team": "", "tat": "",
+            "shoot_date": "", "edit_start": "", "planned_delivery": "", "actual_delivery": "",
+            "upload": d.isoformat() if d else "", "upload_link": r.get("url", ""),
+            "dit": "", "last_update": "", "remarks": "",
+            "views": _reel_views(r), "likes": r["likes"], "comments": r["comments"],
+            "reel_url": r.get("url"), "reel_code": r["shortCode"],
+        })
+    status_counts = {"Uploaded": len(items)}
+    ops = {
+        "munim_id": pod_id, "pod": cfg.get("name", handle), "lead": cfg.get("lead", ""),
+        "total": len(items), "uploaded": len(items), "in_progress": 0, "tanked": 0,
+        "status_counts": status_counts, "items": items,
+        "active": len(items), "shipped": len(items), "win_status_counts": status_counts,
+        "on_time_rate": None, "conversion_rate": None, "avg_shoot_to_live": None,
+        "avg_edit_to_delivery": None, "avg_shoot_to_edit": None, "final_status_label": "Uploaded",
+        "series": [], "series_labels": [],
+        "gallery_reels": [r["shortCode"] for r in reels if r.get("shortCode")],
+        "social_only": True,
+    }
+    # real "reels per week" trend over the window
+    if start and today:
+        span = max((today - start).days, 7)
+        weeks = max(1, min(12, (span + 6) // 7))
+        buckets, labels = [0] * weeks, []
+        for w in range(weeks):
+            ws = start + timedelta(days=int(w * span / weeks))
+            labels.append(ws.strftime("%d %b").lstrip("0"))
+        for r in reels:
+            d = _reel_date(r)
+            if d and start <= d <= today:
+                idx = max(0, min(weeks - 1, int((d - start).days / span * weeks)))
+                buckets[idx] += 1
+        ops["series"], ops["series_labels"] = buckets, labels
+
+    insta = build_insta(pod_id, items, start, today)
+    if insta:
+        ops["insta"] = insta
+        ops["cpv"] = build_cpv(pod_id, insta, start, today)   # None unless a tag exists
+    return ops
+
+
 # ── the big tray: everything the dashboard needs in one fetch ───────────────
 _data_cache = {}      # days -> (timestamp, payload)
 DATA_TTL = 120        # seconds; sheets only refresh on snapshot anyway
@@ -756,6 +815,12 @@ def _build_data_inner(days):
 
     ranked.sort(key=lambda x: x["shipped"], reverse=True)
 
+    # Instagram-only pods (no production sheet) — e.g. Elevator Pitch
+    for spid in SOCIAL_PODS:
+        sp = build_social_pod(spid, start, today)
+        if sp:
+            pods[spid] = sp
+
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "period": {"days": days, "from": start.isoformat(), "to": today.isoformat()},
@@ -764,7 +829,7 @@ def _build_data_inner(days):
         "ranked": ranked,
         "coverage": build_coverage(days),
         "brand": build_brand(),
-        "live_pod_ids": [m for m in TAB_TO_MUNIM.values()],
+        "live_pod_ids": [m for m in TAB_TO_MUNIM.values()] + list(SOCIAL_PODS.keys()),
     }
 
 
