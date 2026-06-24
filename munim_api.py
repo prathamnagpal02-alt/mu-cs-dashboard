@@ -309,22 +309,113 @@ def _weekly_series(rows, cols, start, today):
     return buckets, labels
 
 
-def pod_operations(tab, rows_in_range, start=None, today=None):
+# The sheet's OWN status columns are the source of truth. We map their wording
+# to clean, consistent labels and only fall back to date-inference when blank.
+DELIVERY_MAP = {
+    "uploaded": "Uploaded", "live": "Uploaded", "published": "Uploaded",
+    "delivered": "Delivered",
+    "editing": "In Editing", "in editing": "In Editing", "edit": "In Editing",
+    "production": "In Production", "shoot done": "In Production", "shot": "In Production",
+    "scripting": "Scripting", "script": "Scripting",
+    "ideation": "Ideation", "idea": "Ideation",
+    "tanked": "Tanked", "dropped": "Tanked", "shelved": "Tanked", "killed": "Tanked",
+    "cancelled": "Cancelled", "canceled": "Cancelled",
+}
+SHOOT_MAP = {
+    "shot": "Shot, Awaiting Edit", "scheduled": "Scheduled",
+    "tbd": "Planned", "cancelled": "Cancelled", "canceled": "Cancelled",
+}
+# How each clean status rolls up for the studio overview + ordering on the page.
+DONE = {"Uploaded", "Delivered", "Live"}
+DEAD = {"Tanked", "Cancelled"}
+STATUS_RANK = {"Ideation": 0, "Scripting": 1, "In Production": 2, "Shot, Awaiting Edit": 2,
+               "In Editing": 3, "Scheduled": 4, "Planned": 4,
+               "Uploaded": 5, "Delivered": 5, "Live": 5,
+               "Pre-production / Ideation": 1, "Tanked": 9, "Cancelled": 9}
+
+
+def canonical_status(d, tab):
+    """Read the sheet's own status; fall back to date-inference only if blank."""
+    sd = str(d.get("Status of Delivery", "") or "").strip()
+    if sd:
+        return DELIVERY_MAP.get(sd.lower(), sd)
+    ss = str(d.get("Status of Shoot", "") or "").strip()
+    if ss:
+        return SHOOT_MAP.get(ss.lower(), ss)
+    return compute_status(d, tab)
+
+
+def _g(d, *keys):
+    for k in keys:
+        v = str(d.get(k, "") or "").strip()
+        if v:
+            return v
+    return ""
+
+
+def item_record(d, tab):
+    return {
+        "name": _g(d, "Video Name") or "(unnamed)",
+        "status": canonical_status(d, tab),
+        "type": _g(d, "Type of video"),
+        "format": _g(d, "Formats"),
+        "shoot_status": _g(d, "Status of Shoot"),
+        "delivery_status": _g(d, "Status of Delivery"),
+        "shoot_lead": _g(d, "Shoot Lead"),
+        "crew": _g(d, "Team who shot it", "who shot it"),
+        "editor": _g(d, "Editor's name"),
+        "editing_team": _g(d, "Editing team"),
+        "tat": _g(d, "TAT"),
+        "shoot_date": _g(d, "Date of Shoot", "Shoot Date"),
+        "edit_start": _g(d, "Edit Start Date"),
+        "planned_delivery": _g(d, "Planned Date of Delivery", "Tentative date of delivery"),
+        "actual_delivery": _g(d, "Actual Date of Delivery", "Date of Delivery"),
+        "upload": _g(d, "Date of Upload", "YT Date of Upload", "YT UPLOAD"),
+        "upload_link": _g(d, "Upload Link", "Upload link"),
+        "dit": _g(d, "DIT Status"),
+        "last_update": _g(d, "Last Update"),
+        "remarks": _g(d, "Remarks by the Producer ", "Remarks by the Producer"),
+    }
+
+
+def _is_real_row(d):
+    return bool(_g(d, "Video Name")) or bool(_g(d, "Status of Delivery"))
+
+
+def pod_operations(tab, all_rows, win_rows, start=None, today=None):
     upload_cols = PODS[tab]["upload_cols"]
     has_upload = bool(upload_cols)
     final_status = "Live" if has_upload else "Delivered"
+    cols = BASE_DATE_COLS + upload_cols
 
-    status_counts = {}
+    # ---- FULL pod: every real row, real status, rich detail ----
+    items = [item_record(d, tab) for d in all_rows if _is_real_row(d)]
+    full_counts = {}
+    for it in items:
+        full_counts[it["status"]] = full_counts.get(it["status"], 0) + 1
+
+    def sort_key(it):
+        d = parse_date_str(it["upload"]) or parse_date_str(it["actual_delivery"]) \
+            or parse_date_str(it["planned_delivery"]) or parse_date_str(it["shoot_date"])
+        return (STATUS_RANK.get(it["status"], 6), -(d.toordinal() if d else 0))
+    items.sort(key=sort_key)
+
+    uploaded = sum(v for k, v in full_counts.items() if k in DONE)
+    in_progress = sum(v for k, v in full_counts.items()
+                      if k in ("Ideation", "Scripting", "In Production",
+                               "In Editing", "Shot, Awaiting Edit"))
+    tanked = sum(v for k, v in full_counts.items() if k in DEAD)
+
+    # ---- WINDOWED: TAT + on-time + activity, for the studio overview ----
+    win_counts = {}
     t_shoot_to_live, t_edit_to_deliv, t_shoot_to_edit, slippage = [], [], [], []
     items_with_shoot = items_at_final = 0
-
-    for d in rows_in_range:
-        st = compute_status(d, tab)
-        status_counts[st] = status_counts.get(st, 0) + 1
+    for d in win_rows:
+        st = canonical_status(d, tab)
+        win_counts[st] = win_counts.get(st, 0) + 1
         shoot = parse_date_str(first_filled(d, SHOOT_DATE_COLS))
         edit = parse_date_str(first_filled(d, EDIT_START_COLS))
         planned = parse_date_str(first_filled(d, ["Planned Date of Delivery",
-                                                  "Tentative Date Of Delivery",
                                                   "Tentative date of delivery"]))
         actual = parse_date_str(first_filled(d, DELIVERED_COLS))
         upload = None
@@ -335,7 +426,7 @@ def pod_operations(tab, rows_in_range, start=None, today=None):
                 break
         if shoot:
             items_with_shoot += 1
-        if st == final_status:
+        if st in DONE:
             items_at_final += 1
         if shoot and upload:
             t_shoot_to_live.append((upload - shoot).days)
@@ -352,15 +443,23 @@ def pod_operations(tab, rows_in_range, start=None, today=None):
     on_time = sum(1 for s in slippage if s <= 0)
     series, series_labels = ([], [])
     if start and today:
-        cols = BASE_DATE_COLS + upload_cols
-        series, series_labels = _weekly_series(rows_in_range, cols, start, today)
+        series, series_labels = _weekly_series(win_rows, cols, start, today)
+
     return {
         "munim_id": TAB_TO_MUNIM.get(tab),
         "pod": display_name(tab),
         "lead": PODS[tab]["lead"],
-        "active": len(rows_in_range),
+        # full-pod truth (matches the sheet exactly)
+        "total": len(items),
+        "uploaded": uploaded,
+        "in_progress": in_progress,
+        "tanked": tanked,
+        "status_counts": full_counts,
+        "items": items,
+        # windowed signals (for the studio overview + trend)
+        "active": len(win_rows),
         "shipped": items_at_final,
-        "status_counts": status_counts,
+        "win_status_counts": win_counts,
         "on_time_rate": round(on_time / len(slippage), 2) if slippage else None,
         "conversion_rate": round(items_at_final / items_with_shoot, 2) if items_with_shoot else None,
         "avg_shoot_to_live": avg(t_shoot_to_live),
@@ -369,26 +468,7 @@ def pod_operations(tab, rows_in_range, start=None, today=None):
         "final_status_label": final_status,
         "series": series,
         "series_labels": series_labels,
-        "recent": _recent_videos(tab, rows_in_range),
     }
-
-
-def _recent_videos(tab, rows, limit=14):
-    out = []
-    for d in rows:
-        out.append({
-            "name": (d.get("Video Name") or "").strip() or "(unnamed)",
-            "status": compute_status(d, tab),
-            "lead": d.get("Lead") or d.get("POC in Charge") or d.get("POC in charge", ""),
-            "shoot_date": d.get("Date of Shoot", ""),
-            "planned_delivery": d.get("Planned Date of Delivery")
-                                or d.get("Tentative date of delivery", ""),
-            "upload": (d.get("Date of Upload") or d.get("YT Date of Upload")
-                       or d.get("YT UPLOAD", "")),
-        })
-        if len(out) >= limit:
-            break
-    return out
 
 
 # ── the big tray: everything the dashboard needs in one fetch ───────────────
@@ -426,17 +506,19 @@ def _build_data_inner(days):
     ranked = []
     for tab in PODS:
         cols = BASE_DATE_COLS + PODS[tab]["upload_cols"]
-        rows = [r for r in fetch_latest_rows(tab) if in_range(r, start, today, cols)]
-        ops = pod_operations(tab, rows, start, today)
+        all_rows = fetch_latest_rows(tab)
+        win_rows = [r for r in all_rows if in_range(r, start, today, cols)]
+        ops = pod_operations(tab, all_rows, win_rows, start, today)
         if ops["munim_id"]:
             pods[ops["munim_id"]] = ops
-        sc = ops["status_counts"]
+        sc = ops["win_status_counts"]
         totals["active"] += ops["active"]
-        totals["live_or_delivered"] += sc.get("Live", 0) + sc.get("Delivered", 0)
+        totals["live_or_delivered"] += sum(v for k, v in sc.items() if k in DONE)
         totals["delivered_pending_upload"] += sc.get("Delivered, Awaiting Upload", 0)
         totals["in_editing"] += sc.get("In Editing", 0)
-        totals["shot_awaiting_edit"] += sc.get("Shot, Awaiting Edit", 0)
-        totals["pre_production"] += sc.get("Pre-production / Ideation", 0)
+        totals["shot_awaiting_edit"] += sc.get("In Production", 0) + sc.get("Shot, Awaiting Edit", 0)
+        totals["pre_production"] += sc.get("Ideation", 0) + sc.get("Scripting", 0) \
+            + sc.get("Planned", 0) + sc.get("Scheduled", 0) + sc.get("Pre-production / Ideation", 0)
         ranked.append({"pod": ops["pod"], "munim_id": ops["munim_id"],
                        "active": ops["active"], "shipped": ops["shipped"]})
 

@@ -623,11 +623,21 @@ body{font-family:var(--sans);font-weight:400;color:var(--ink);background:var(--p
 .pu-row{display:flex;gap:14px;padding-bottom:18px;position:relative}
 .pu-row:not(:last-child)::before{content:"";position:absolute;left:5px;top:15px;bottom:-3px;width:2px;background:var(--line-soft)}
 .pu-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0;margin-top:4px;background:var(--muted-2);z-index:1;box-shadow:0 0 0 3px var(--card)}
-.pu-dot.live{background:var(--good)}.pu-dot.build{background:var(--orange)}
-.pu-bd{flex:1;min-width:0}
+.pu-dot.live{background:var(--good)}.pu-dot.build{background:var(--orange)}.pu-dot.dead{background:var(--bad)}
+.pu-bd{flex:1;min-width:0;padding-bottom:2px}
 .pu-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .pu-name{font-weight:600;font-size:14px;color:var(--ink)}
-.pu-meta{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:3px;letter-spacing:.02em}
+.status-pill.dead{background:rgba(201,83,59,.12);color:var(--bad)}
+.status-pill.dead .d{background:var(--bad)}
+.pu-link{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--cyan-deep);text-decoration:none;letter-spacing:.04em}
+.pu-link:hover{text-decoration:underline}
+.pu-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.pu-tag{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--paper-2);border:1px solid var(--line-soft);border-radius:5px;padding:3px 7px}
+.pu-track{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:7px;font-family:var(--mono);font-size:10px;color:var(--ink-2)}
+.pu-step-k{color:var(--muted-2);font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-size:8.5px}
+.pu-arrow{color:var(--muted-2)}
+.pu-meta{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:5px;letter-spacing:.02em}
+.pu-note{font-size:12px;color:var(--ink-2);margin-top:6px;font-style:italic;line-height:1.5}
 </style>
 </head>
 <body>
@@ -865,7 +875,7 @@ const RANGE_DAYS={'7D':7,'30D':30,'90D':90,'QTD':90};
 function liveDays(){return RANGE_DAYS[state.range]||30;}
 async function fetchLive(){
   try{
-    const res=await fetch('data/'+liveDays()+'.json',{cache:'no-store'});
+    const res=await fetch('data/'+liveDays()+'.json?v='+Date.now(),{cache:'no-store'});
     if(!res.ok)throw new Error('HTTP '+res.status);
     LIVE=await res.json();LIVE._ok=true;
   }catch(e){LIVE={_ok:false,_err:String(e)};}
@@ -888,22 +898,28 @@ function isLive(){return LIVE&&LIVE._ok;}
 function liveModel(id){
   const p=(LIVE.pods||{})[id];if(!p)return null;
   const sc=p.status_counts||{};
-  const order=['Live','Delivered','Delivered, Awaiting Upload','In Editing','Shot, Awaiting Edit','Pre-production / Ideation'];
-  let donutData=order.filter(k=>sc[k]).map(k=>[k,sc[k]]);
-  if(!donutData.length)donutData=[['No items in window',1]];
-  const flat='<span class="flat">this window</span>';
+  const order=['Uploaded','Delivered','Live','In Editing','In Production','Shot, Awaiting Edit','Scripting','Ideation','Scheduled','Planned','Pre-production / Ideation','Tanked','Cancelled'];
+  let donutData=Object.keys(sc).sort((a,b)=>(order.indexOf(a)+99)%100-(order.indexOf(b)+99)%100).map(k=>[k,sc[k]]);
+  if(!donutData.length)donutData=[['No items',1]];
+  const flat='<span class="flat">whole pod</span>';
   const kpis=[
-    {l:'Active pieces',v:p.active,d:0,c:'',dtext:flat},
-    {l:p.final_status_label||'Live',v:p.shipped,d:0,c:'k',dtext:flat},
-    {l:'In editing',v:sc['In Editing']||0,d:0,c:'o',dtext:flat},
-    {l:'Awaiting edit',v:sc['Shot, Awaiting Edit']||0,d:0,c:'y',dtext:flat}
+    {l:'Total videos',v:p.total||0,d:0,c:'',dtext:flat},
+    {l:'Uploaded',v:p.uploaded||0,d:0,c:'k',dtext:flat},
+    {l:'In progress',v:p.in_progress||0,d:0,c:'o',dtext:flat},
+    {l:'Tanked',v:p.tanked||0,d:0,c:'y',dtext:flat}
   ];
-  const series=(p.series&&p.series.length)?p.series:[p.active||0];
+  const series=(p.series&&p.series.length)?p.series:[0];
   const labels=(p.series_labels&&p.series_labels.length)?p.series_labels:series.map((_,i)=>'W'+(i+1));
-  const rows=(p.recent||[]).map(rv=>[rv.name,rv.status,rv.lead||'—',rv.planned_delivery||'—']);
-  return {live:true,kpis,trendLabel:'Pieces in motion',trend:series,L:labels,
-    donut:{title:'Status breakdown',center:p.active,centerSub:'Active',data:donutData},
-    table:{head:['Video','Status','Lead','Planned delivery'],rows:rows.length?rows:[['No recent items','—','—','—']]}};
+  const items=p.items||[];
+  const rows=items.slice(0,12).map(it=>[it.name,it.status,it.editor||it.shoot_lead||'—',it.upload||it.planned_delivery||'—']);
+  return {live:true,kpis,trendLabel:'Uploads / week',trend:series,L:labels,
+    donut:{title:'Pipeline by status',center:p.total||0,centerSub:'Videos',data:donutData},
+    table:{head:['Video','Status','Owner','Date'],rows:rows.length?rows:[['No items','—','—','—']]}};
+}
+function statusClass(s){
+  if(['Uploaded','Delivered','Live'].includes(s))return 'live';
+  if(['Tanked','Cancelled'].includes(s))return 'dead';
+  return 'build';
 }
 
 /* ── Live AI insights ("MUनीम says", written by Claude from real numbers) ── */
@@ -1582,16 +1598,32 @@ function igGalleryHtml(p,id){
 }
 function projectUpdatesHtml(p,id){
   if(!(isLive()&&LIVE.pods&&LIVE.pods[id]))return '';
-  const pod=LIVE.pods[id];const items=pod.recent||[];const sc=pod.status_counts||{};
-  const order=['Live','Delivered','Delivered, Awaiting Upload','In Editing','Shot, Awaiting Edit','Pre-production / Ideation'];
-  const chips=order.filter(k=>sc[k]).map(k=>`<span class="pu-chip ${k==='Live'||k==='Delivered'?'live':'build'}">${k} · ${sc[k]}</span>`).join('');
-  const rows=items.map(it=>{const live=it.status==='Live'||it.status==='Delivered';
-    const meta=[it.lead?'Owner '+it.lead:'',it.shoot_date?'Shot '+String(it.shoot_date).trim():'',it.planned_delivery?'Planned '+String(it.planned_delivery).trim():'',it.upload?'Uploaded '+String(it.upload).trim():''].filter(Boolean).join('   ·   ');
-    return `<div class="pu-row"><div class="pu-dot ${live?'live':'build'}"></div><div class="pu-bd"><div class="pu-top"><span class="pu-name">${it.name}</span><span class="status-pill ${live?'live':'build'}"><span class="d"></span>${it.status}</span></div><div class="pu-meta">${meta||('Part of '+p.name)}</div></div></div>`;}).join('');
-  return `<div class="panel-row full"><div class="panel"><div class="panel-head"><div><div class="panel-title">Project Updates</div><div class="panel-sub">Live timeline from the ${p.name} sheet · what the pod is working on right now</div></div><span class="panel-tag" style="border-color:var(--good);color:var(--good)">Live</span></div>
+  const pod=LIVE.pods[id];const items=pod.items||[];const sc=pod.status_counts||{};
+  const order=['Ideation','Scripting','In Production','Shot, Awaiting Edit','In Editing','Scheduled','Planned','Uploaded','Delivered','Live','Pre-production / Ideation','Tanked','Cancelled'];
+  const chips=Object.keys(sc).sort((a,b)=>order.indexOf(a)-order.indexOf(b)).map(k=>`<span class="pu-chip ${statusClass(k)}">${k} · ${sc[k]}</span>`).join('');
+  const esc=s=>String(s||'').replace(/</g,'&lt;');
+  const dateTrack=it=>{
+    const steps=[['Shot',it.shoot_date],['Edit',it.edit_start],['Planned',it.planned_delivery],['Delivered',it.actual_delivery],['Uploaded',it.upload]].filter(s=>s[1]);
+    return steps.map(s=>`<span class="pu-step"><span class="pu-step-k">${s[0]}</span> ${esc(s[1])}</span>`).join('<span class="pu-arrow">→</span>');
+  };
+  const rows=items.map(it=>{
+    const cls=statusClass(it.status);
+    const tags=[it.type,it.format,it.tat?('TAT '+it.tat):''].filter(Boolean).map(t=>`<span class="pu-tag">${esc(t)}</span>`).join('');
+    const people=[it.shoot_lead?'Shoot: '+it.shoot_lead:'',it.crew?'Crew: '+it.crew:'',it.editor?'Editor: '+it.editor:'',(!it.editor&&it.editing_team)?'Edit: '+it.editing_team:''].filter(Boolean).map(esc).join('   ·   ');
+    const track=dateTrack(it);
+    const note=it.last_update||it.remarks;
+    const link=it.upload_link&&/^https?:/i.test(it.upload_link)?`<a class="pu-link" href="${it.upload_link}" target="_blank" rel="noopener">Open ↗</a>`:'';
+    return `<div class="pu-row"><div class="pu-dot ${cls}"></div><div class="pu-bd">
+      <div class="pu-top"><span class="pu-name">${esc(it.name)}</span><span class="status-pill ${cls}"><span class="d"></span>${esc(it.status)}</span>${link}</div>
+      ${tags?`<div class="pu-tags">${tags}</div>`:''}
+      ${track?`<div class="pu-track">${track}</div>`:''}
+      ${people?`<div class="pu-meta">${people}</div>`:''}
+      ${note?`<div class="pu-note">“${esc(note)}”</div>`:''}
+    </div></div>`;}).join('');
+  return `<div class="panel-row full"><div class="panel"><div class="panel-head"><div><div class="panel-title">Project Updates</div><div class="panel-sub">Every project in the ${p.name} sheet · in-progress first, then shipped</div></div><span class="panel-tag" style="border-color:var(--good);color:var(--good)">Live · ${pod.total||items.length} projects</span></div>
     <div class="pu-chips">${chips}</div>
-    <div class="pu-timeline">${rows||'<p class="note">No active items in this window. Widen the date range to see more.</p>'}</div>
-    <p class="note" style="margin-top:6px">Streams live from the ${p.name} production sheet via Cohesivity. Refreshed ${new Date(LIVE.generated_at).toLocaleString('en-GB')}.</p></div></div>`;
+    <div class="pu-timeline">${rows||'<p class="note">No projects found in the sheet.</p>'}</div>
+    <p class="note" style="margin-top:6px">Mirrors the ${p.name} production sheet exactly via Cohesivity. Refreshed ${new Date(LIVE.generated_at).toLocaleString('en-GB')}.</p></div></div>`;
 }
 function podProjectsBody(p,id){
   if(isLive()&&LIVE.pods&&LIVE.pods[id])return projectUpdatesHtml(p,id);
