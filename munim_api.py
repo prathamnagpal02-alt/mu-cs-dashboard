@@ -54,8 +54,12 @@ ORM_SHEET_ID = "1kBFoCe28vrkVqnaRyn3dqNxBs_KSZf8MuZcpVp_vAXE"
 
 # pod id -> Instagram handle (extend as we connect more accounts)
 POD_IG = {"builders": "builders.mu", "elevator": "elevatorpitch.mu"}
-# pod id -> the Content-Expenses "Pod" dropdown label(s) to sum for CPV cost
-POD_EXPENSE_TAG = {"builders": "builders.mu"}   # matches "Builders.mu / Student Stories"
+# pod id -> canonical pod name used in the Expense Master Content ledger
+POD_EXPENSE_CANON = {
+    "builders": "Builders.mu", "films": "Brand Films", "perf": "Performance Ads",
+    "seriesc": "Series C", "offcampus": "Offcampus", "opm": "OPM",
+    "coverage": "Coverage", "bharat": "PGP Bharat", "instagram": "Instagram",
+}
 # IG-only pods with NO production sheet — their "projects" come from the reels.
 SOCIAL_PODS = {"elevator": {"name": "Elevator Pitch", "lead": "Anu Kiran"}}
 IG_CACHE_DIR = Path(__file__).parent / "ig_cache"
@@ -637,6 +641,12 @@ def build_insta(pod_id, items, start=None, today=None):
     total_likes = sum(r["likes"] for r in win)
     total_comments = sum(r["comments"] for r in win)
     top = sorted(win, key=_reel_views, reverse=True)[:5]
+    vbm = {}   # views by month (all reels) — for per-month CPV
+    for r in reels:
+        d = _reel_date(r)
+        if d:
+            mk = d.strftime("%Y-%m")
+            vbm[mk] = vbm.get(mk, 0) + _reel_views(r)
     return {
         "handle": handle,
         "followers": ig.get("followers"),          # current / point-in-time (not windowable)
@@ -649,6 +659,7 @@ def build_insta(pod_id, items, start=None, today=None):
         "avg_views": round(total_views / len(win)) if win else 0,
         "engagement_rate": round((total_likes + total_comments) / total_views * 100, 2) if total_views else None,
         "windowed": bool(start and today),
+        "views_by_month": vbm,
         "matched_to_sheet": matched,
         "scraped_at": ig.get("scraped_at"),
         "views_metric": IG_VIEWS_METRIC,
@@ -658,30 +669,31 @@ def build_insta(pod_id, items, start=None, today=None):
 
 
 def build_cpv(pod_id, insta, start=None, today=None):
+    """CPV = pod's Content-Expenses spend (from the new FY26/FY27 Expense Master)
+    divided by views. Windowed when the range has logged spend, else all-time."""
     if not insta:
         return None
-    tag = POD_EXPENSE_TAG.get(pod_id)
-    if not tag:
+    canon = POD_EXPENSE_CANON.get(pod_id)
+    if not canon:
         return None
-    exp = pod_expenses(tag)
-    # spend within the window (by incur date)
-    if start and today:
-        wrows = [m for m in exp["rows"] if m["date"] and start <= m["date"] <= today]
-        wcost, wcount = round(sum(m["amount"] for m in wrows)), len(wrows)
-    else:
-        wcost, wcount = exp["total"], exp["count"]
-    views_win = insta.get("total_views") or 0
-    if wcost > 0 and views_win > 0:
-        cost, views, count, scope = wcost, views_win, wcount, "range"
-    else:
-        # expenses lag the reels — fall back to the lifetime CPV so it never shows ₹0
-        cost, views, count, scope = exp["total"], insta.get("total_views_alltime") or 0, exp["count"], "all-time"
-    cpv = cost / views if views else None
+    exp_all = content_pod_expense(canon)
+    views_all = insta.get("total_views_alltime") or 0
+    cpv = exp_all["total_gst"] / views_all if views_all else None
+    # per-month CPV: spend that month ÷ views of reels posted that month
+    vbm = insta.get("views_by_month", {})
+    sbm = {m["month"]: m["amount"] for m in exp_all["by_month"]}
+    by_month_cpv = []
+    for mk in sorted(set(list(vbm) + list(sbm))):
+        sp, vw = sbm.get(mk, 0), vbm.get(mk, 0)
+        by_month_cpv.append({"month": mk, "spend": round(sp), "views": int(vw),
+                             "cpv": round(sp / vw, 3) if (vw and sp) else None})
     return {
-        "cost": cost, "views": views, "count": count, "tag": exp["tag"], "scope": scope,
+        "cost": exp_all["total_gst"], "views": views_all, "count": exp_all["count"],
+        "tag": canon, "scope": "all-time",
         "cpv": round(cpv, 3) if cpv is not None else None,
         "target_short": CPV_TARGET_SHORT, "target_long": CPV_TARGET_LONG,
-        "by_month": exp["by_month"],
+        "by_month": [{"date": m["month"], "value": m["amount"]} for m in exp_all["by_month"]],
+        "by_month_cpv": by_month_cpv,
     }
 
 
@@ -944,6 +956,41 @@ def _ledger_master(fy):
     return out
 
 
+_clines = {}   # ts -> lines
+
+
+def content_lines_cached():
+    hit = _clines.get("v")
+    if hit and time.time() - hit[0] < 180:
+        return hit[1]
+    lines = _content_lines()
+    _clines["v"] = (time.time(), lines)
+    return lines
+
+
+def content_pod_expense(canon, start=None, today=None):
+    """One pod's Content-Expenses spend (from the FY26/FY27 Expense Master),
+    optionally windowed by date. Used by CPV and the per-pod expense panels."""
+    lines = [l for l in content_lines_cached() if l["pod"] == canon]
+    if start and today:
+        lines = [l for l in lines
+                 if parse_date_str(l["date"]) and start <= parse_date_str(l["date"]) <= today]
+    bym, vend = {}, {}
+    for l in lines:
+        if l["month"]:
+            bym[l["month"]] = bym.get(l["month"], 0) + l["gst"]
+        vend[l["vendor"]] = vend.get(l["vendor"], 0) + l["gst"]
+    return {
+        "total_gst": round(sum(l["gst"] for l in lines)),
+        "total_nogst": round(sum(l["nogst"] for l in lines)),
+        "count": len(lines),
+        "by_month": [{"month": m, "amount": round(bym[m])} for m in sorted(bym)],
+        "top_vendors": sorted(({"vendor": k, "amount": round(v)} for k, v in vend.items()),
+                              key=lambda x: -x["amount"])[:6],
+        "lines": sorted(lines, key=lambda l: l["date"] or "", reverse=True)[:10],
+    }
+
+
 def build_expense():
     master = {}
     master_source = {}
@@ -1021,6 +1068,11 @@ def _build_data_inner(days):
             if insta:
                 ops["insta"] = insta
                 ops["cpv"] = build_cpv(mid, insta, start, today)
+        # per-pod spend from the Expense Master (shows on the pod's own page)
+        if mid and mid in POD_EXPENSE_CANON:
+            pe = content_pod_expense(POD_EXPENSE_CANON[mid])
+            if pe["count"]:
+                ops["pod_expense"] = pe
         if ops["munim_id"]:
             pods[ops["munim_id"]] = ops
         sc = ops["win_status_counts"]

@@ -674,6 +674,13 @@ body{font-family:var(--sans);font-weight:400;color:var(--ink);background:var(--p
 .exp-note{font-family:var(--mono);font-size:9.5px;color:var(--muted-2);max-width:340px;line-height:1.5}
 .exp-search{margin-left:auto;font-family:var(--sans);font-size:12.5px;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 15px;min-width:230px}
 .exp-search:focus{outline:none;border-color:var(--cyan)}
+.exp-month{font-family:var(--sans);font-size:12.5px;font-weight:600;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 14px;cursor:pointer}
+.exp-month:focus{outline:none;border-color:var(--cyan)}
+.cpvm-table{width:100%;border-collapse:collapse;margin-top:4px}
+.cpvm-table td,.cpvm-table th{padding:6px 8px;font-size:11.5px;text-align:right;border-bottom:1px solid var(--line-soft)}
+.cpvm-table th{font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-2);font-weight:700}
+.cpvm-table td:first-child,.cpvm-table th:first-child{text-align:left;font-family:var(--mono);color:var(--ink-2)}
+.cpvm-table .good{color:var(--good);font-weight:700}.cpvm-table .bad{color:var(--bad);font-weight:700}
 </style>
 </head>
 <body>
@@ -1219,7 +1226,7 @@ function renderCoverage(){
   document.querySelectorAll('[data-go]').forEach(el=>el.onclick=()=>{state.view=el.dataset.go;render();window.scrollTo({top:0});});
 }
 
-let EXP=null;const expState={fy:'FY26',gst:true,q:''};
+let EXP=null;const expState={fy:'FY26',gst:true,q:'',month:'all'};
 function rupL(v){return v>=1e7?'₹'+(v/1e7).toFixed(2)+'Cr':v>=1e5?'₹'+(v/1e5).toFixed(1)+'L':v>=1e3?'₹'+(v/1e3).toFixed(0)+'K':'₹'+Math.round(v);}
 function renderExpense(){
   document.getElementById('crumbs').innerHTML='Studio &nbsp;›&nbsp; <b>Expense Master</b>';
@@ -1234,8 +1241,16 @@ function renderExpense(){
   const catArr=applyPal(Object.entries(catTot).sort((a,b)=>b[1]-a[1]));const catSum=catArr.reduce((a,b)=>a+b[1],0)||1;
   const monthArr=mrows.filter(m=>m.month).map(m=>[m.month_label||m.month,m.total]);
   const lines=EXP.lines.filter(l=>l.fy===fy);
-  const podTot={};lines.forEach(l=>{podTot[l.pod]=(podTot[l.pod]||0)+l[basis];});
+  const monthsFY=[...new Set(lines.map(l=>l.month).filter(Boolean))].sort();
+  if(expState.month!=='all'&&!monthsFY.includes(expState.month))expState.month='all';
+  const dlines=(expState.month!=='all')?lines.filter(l=>l.month===expState.month):lines;
+  const podTot={};dlines.forEach(l=>{podTot[l.pod]=(podTot[l.pod]||0)+l[basis];});
   const podArr=Object.entries(podTot).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  const vendT={},statT={},deptT={};
+  dlines.forEach(l=>{vendT[l.vendor]=(vendT[l.vendor]||0)+l[basis];statT[l.status]=(statT[l.status]||0)+l[basis];deptT[l.dept]=(deptT[l.dept]||0)+l[basis];});
+  const vendArr=Object.entries(vendT).filter(v=>v[0]&&v[0]!=='—').sort((a,b)=>b[1]-a[1]).slice(0,8);const vendMax=Math.max(1,...vendArr.map(v=>v[1]));
+  const deptArr=applyPal(Object.entries(deptT).filter(d=>d[0]&&d[0]!=='—').sort((a,b)=>b[1]-a[1]).slice(0,6));const deptSum=deptArr.reduce((a,b)=>a+b[1],0)||1;
+  const cleared=statT['Cleared']||0,pending=statT['Pending']||0,statTot=Object.values(statT).reduce((a,b)=>a+b,0)||1;
   const subTot={};mrows.forEach(m=>{for(const k in(m.content_sub||{}))subTot[k]=(subTot[k]||0)+m.content_sub[k];});
   if(!Object.keys(subTot).length)lines.forEach(l=>{for(const k in(l.sub||{}))subTot[k]=(subTot[k]||0)+(l.sub[k]||0);});
   const subArr=Object.entries(subTot).sort((a,b)=>b[1]-a[1]);const subMax=Math.max(1,...subArr.map(s=>s[1]));
@@ -1243,7 +1258,9 @@ function renderExpense(){
   const biggestCat=catArr[0]?catArr[0][0]:'—';
   // line-item table (filtered + sorted by amount)
   const q=(expState.q||'').toLowerCase();
-  const tlines=lines.filter(l=>!q||(l.vendor+' '+l.desc+' '+l.pod+' '+l.dept).toLowerCase().includes(q)).sort((a,b)=>b[basis]-a[basis]).slice(0,80);
+  const tlines=dlines.filter(l=>!q||(l.vendor+' '+l.desc+' '+l.pod+' '+l.dept).toLowerCase().includes(q)).sort((a,b)=>b[basis]-a[basis]).slice(0,80);
+  const monthLabel=m=>{if(m==='all')return 'All months';const[y,mo]=m.split('-');return ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+mo]+' '+y;};
+  const monthOpts='<option value="all">All months</option>'+monthsFY.map(m=>`<option value="${m}"${expState.month===m?' selected':''}>${monthLabel(m)}</option>`).join('');
   const src=EXP.master_source?EXP.master_source[fy]:'';
   const fyBtn=(f)=>`<button class="exp-tog${expState.fy===f?' on':''}" data-expfy="${f}">${f}</button>`;
   document.getElementById('content').innerHTML=`
@@ -1251,7 +1268,8 @@ function renderExpense(){
    <div class="exp-controls">
      <div class="exp-grp">${fyBtn('FY26')}${fyBtn('FY27')}</div>
      <div class="exp-grp"><button class="exp-tog${expState.gst?' on':''}" data-expgst="1">Incl. GST</button><button class="exp-tog${!expState.gst?' on':''}" data-expgst="0">Excl. GST</button></div>
-     <span class="exp-note">GST toggle applies to pod &amp; line-item detail (Content ledger). Category/month totals are the official rollup.</span>
+     <select class="exp-month" id="expMonthSel">${monthOpts}</select>
+     <span class="exp-note">Month filters pod, vendor, status &amp; line detail. Category/month charts show the whole ${fy}.</span>
    </div>
    <div class="kpi-row">
      <div class="kpi"><div class="lbl">${fy} total spend</div><div class="val">${rupL(EXP.fy_totals[fy]||total)}</div><div class="ul"></div><div class="delta flat">${mrows.length} months</div></div>
@@ -1268,14 +1286,25 @@ function renderExpense(){
      <div class="panel"><div class="panel-head"><div><div class="panel-title">Content production breakdown</div><div class="panel-sub">Equipment · Manpower · Props · Production</div></div><span class="panel-tag">Drill-down</span></div>
        <div class="mbars" style="margin-top:6px">${subArr.map(s=>`<div class="mbar"><div class="mbar-k" style="width:84px">${s[0]}</div><div class="mbar-track"><div class="mbar-fill" style="width:${Math.round(s[1]/subMax*100)}%"></div></div><div class="mbar-v">${rupL(s[1])}</div></div>`).join('')||'<p class="note">No sub-breakdown for this year.</p>'}</div></div>
    </div>
-   <div class="panel-row full"><div class="panel"><span class="ghost">₹</span><div class="panel-head"><div><div class="panel-title">Line items</div><div class="panel-sub">${fy} content ledger · every expense, top 80 by amount</div></div><input class="exp-search" id="expSearch" placeholder="Search vendor, pod, description…" value="${(expState.q||'').replace(/"/g,'&quot;')}"></div>
+   <div class="panel-row two">
+     <div class="panel"><div class="panel-head"><div><div class="panel-title">Top vendors</div><div class="panel-sub">${fy}${expState.month!=='all'?' · '+monthLabel(expState.month):''} · ${expState.gst?'incl.':'excl.'} GST</div></div><span class="panel-tag">Vendors</span></div>
+       <div class="mbars" style="margin-top:4px">${vendArr.map(v=>`<div class="mbar"><div class="mbar-k" style="width:110px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${v[0]}</div><div class="mbar-track"><div class="mbar-fill" style="width:${Math.round(v[1]/vendMax*100)}%;background:var(--orange)"></div></div><div class="mbar-v">${rupL(v[1])}</div></div>`).join('')||'<p class="note">No vendor data.</p>'}</div></div>
+     <div class="panel"><div class="panel-head"><div><div class="panel-title">Payment status</div><div class="panel-sub">Cleared vs pending · ${expState.month==='all'?fy:monthLabel(expState.month)}</div></div></div>
+       <div class="cpv-meta" style="border:0;padding:6px 0 14px"><div><div class="cpv-m-v" style="color:var(--good)">${rupL(cleared)}</div><div class="cpv-m-l">Cleared · ${Math.round(cleared/statTot*100)}%</div></div><div><div class="cpv-m-v" style="color:var(--bad)">${rupL(pending)}</div><div class="cpv-m-l">Pending · ${Math.round(pending/statTot*100)}%</div></div></div>
+       <div class="cpv-bar"><div class="cpv-fill" style="width:${Math.round(cleared/statTot*100)}%;background:var(--good)"></div></div>
+       <div class="panel-title" style="margin:18px 0 6px;font-size:15px">By department</div>
+       <div class="donut-wrap" style="min-height:auto"><canvas id="expDept" style="max-height:180px"></canvas></div>${legendHtml(deptArr,deptSum)}</div>
+   </div>
+   <div class="panel-row full"><div class="panel"><span class="ghost">₹</span><div class="panel-head"><div><div class="panel-title">Line items</div><div class="panel-sub">${fy}${expState.month!=='all'?' · '+monthLabel(expState.month):''} content ledger · top 80 by amount</div></div><input class="exp-search" id="expSearch" placeholder="Search vendor, pod, description…" value="${(expState.q||'').replace(/"/g,'&quot;')}"></div>
      <table class="tbl"><thead><tr><th>Vendor</th><th>Description</th><th>Pod</th><th>Dept</th><th>Date</th><th>Amount</th><th>Status</th></tr></thead><tbody>${tlines.map(l=>`<tr><td class="name">${(l.vendor||'—')}</td><td>${(l.desc||'').replace(/</g,'&lt;')}</td><td>${l.pod}</td><td>${l.dept}</td><td class="num">${l.date||'—'}</td><td class="num">${rupL(l[basis])}</td><td><span class="status-pill ${l.status==='Cleared'?'live':l.status==='Pending'?'build':''}" style="font-size:9px">${l.status}</span></td></tr>`).join('')}</tbody></table>
      <p class="note">Showing ${tlines.length} of ${lines.length} ${fy} content line items. ${other} Master Payments ${EXP.fy_totals[other]?'':'not yet filled — '}aggregated from ledgers where needed.</p></div></div>`;
   charts.push(donutChart(document.getElementById('expCat').getContext('2d'),catArr));
   charts.push(barChart(document.getElementById('expMonth').getContext('2d'),monthArr.map(m=>m[0].slice(0,3)+(m[0].match(/20(\d2)/)?'':'')),monthArr.map(m=>m[1]),C.cyan));
   charts.push(new Chart(document.getElementById('expPod').getContext('2d'),{type:'bar',data:{labels:podArr.map(p=>p[0]),datasets:[{data:podArr.map(p=>p[1]),backgroundColor:podArr.map((_,i)=>i===0?C.orange:C.cyan),borderRadius:6,maxBarThickness:20}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{backgroundColor:'#161512',padding:11,bodyFont:{family:'Montserrat',size:13,weight:'800'},displayColors:false,callbacks:{label:c=>rupL(c.parsed.x)}}},scales:{x:{grid:{color:'#E7E1D2'},border:{display:false},ticks:{font:{family:'Montserrat',size:9},color:'#ABA593',callback:v=>rupL(v)}},y:{grid:{display:false},border:{display:false},ticks:{font:{family:'Montserrat',size:10,weight:'600'},color:'#3A372F'}}}}}));
-  document.querySelectorAll('[data-expfy]').forEach(el=>el.onclick=()=>{expState.fy=el.dataset.expfy;render();});
+  const dc=document.getElementById('expDept');if(dc)charts.push(donutChart(dc.getContext('2d'),deptArr));
+  document.querySelectorAll('[data-expfy]').forEach(el=>el.onclick=()=>{expState.fy=el.dataset.expfy;expState.month='all';render();});
   document.querySelectorAll('[data-expgst]').forEach(el=>el.onclick=()=>{expState.gst=el.dataset.expgst==='1';render();});
+  const ms=document.getElementById('expMonthSel');if(ms)ms.onchange=()=>{expState.month=ms.value;render();};
   const se=document.getElementById('expSearch');if(se)se.oninput=()=>{expState.q=se.value;const tb=se.closest('.panel').querySelector('tbody');const ql=se.value.toLowerCase();const fl=lines.filter(l=>!ql||(l.vendor+' '+l.desc+' '+l.pod+' '+l.dept).toLowerCase().includes(ql)).sort((a,b)=>b[basis]-a[basis]).slice(0,80);tb.innerHTML=fl.map(l=>`<tr><td class="name">${l.vendor||'—'}</td><td>${(l.desc||'').replace(/</g,'&lt;')}</td><td>${l.pod}</td><td>${l.dept}</td><td class="num">${l.date||'—'}</td><td class="num">${rupL(l[basis])}</td><td><span class="status-pill ${l.status==='Cleared'?'live':l.status==='Pending'?'build':''}" style="font-size:9px">${l.status}</span></td></tr>`).join('');};
   document.querySelectorAll('[data-go]').forEach(el=>el.onclick=()=>{state.view=el.dataset.go;render();window.scrollTo({top:0});});
 }
@@ -1395,6 +1424,7 @@ function igLiveDetail(h,pid){
    ${kpiHtml}
    ${instaStatsHtml(p,pid)}
    ${cpvHtml(p,pid)}
+   ${podExpenseHtml(p,pid)}
    ${projectUpdatesHtml(p,pid)}
    ${igGalleryHtml(p,pid)}`;
   hydrateInsights();
@@ -1722,16 +1752,31 @@ function cpvHtml(p,id){
   const c=isLive()&&LIVE.pods&&LIVE.pods[id]&&LIVE.pods[id].cpv;if(!c||c.cpv==null)return '';
   const under=c.cpv<=c.target_short;
   const ratio=Math.max(.04,Math.min(1,c.cpv/c.target_short));
-  const months=Object.entries(c.by_month||{});const maxM=Math.max(1,...months.map(m=>m[1]));
-  const mbars=months.map(([k,v])=>`<div class="mbar"><div class="mbar-k">${k}</div><div class="mbar-track"><div class="mbar-fill" style="width:${Math.round(v/maxM*100)}%"></div></div><div class="mbar-v">${rupee(v)}</div></div>`).join('')||'<p class="note">No dated expenses.</p>';
+  const ml=m=>{const[y,mo]=m.split('-');return ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+mo]+" '"+y.slice(2);};
+  const bmc=(c.by_month_cpv||[]).filter(m=>m.spend||m.views);
+  const rows=bmc.slice(-10).reverse().map(m=>`<tr><td>${ml(m.month)}</td><td>${m.spend?rupL(m.spend):'—'}</td><td>${m.views?fmt(m.views):'—'}</td><td class="${m.cpv==null?'':m.cpv<=c.target_short?'good':'bad'}">${m.cpv==null?'—':'₹'+m.cpv.toFixed(3)}</td></tr>`).join('');
   return `<div class="panel-row two">
-    <div class="panel"><div class="panel-head"><div><div class="panel-title">CPV · Cost per view</div><div class="panel-sub">${c.tag} spend ÷ views · ${c.scope==='all-time'?'all-time':state.range}</div></div><span class="panel-tag" style="border-color:${under?'var(--good)':'var(--bad)'};color:${under?'var(--good)':'var(--bad)'}">${under?'Under target':'Over target'}</span></div>
-      ${c.scope==='all-time'?'<p class="note" style="margin:0 0 8px">No expenses logged in '+state.range+' (invoices lag reels by months), so this shows the all-time CPV.</p>':''}
+    <div class="panel"><div class="panel-head"><div><div class="panel-title">CPV · Cost per view</div><div class="panel-sub">${c.tag} content spend ÷ views · all-time</div></div><span class="panel-tag" style="border-color:${under?'var(--good)':'var(--bad)'};color:${under?'var(--good)':'var(--bad)'}">${under?'Under target':'Over target'}</span></div>
       <div class="cpv-big">₹${c.cpv.toFixed(3)}<span class="cpv-unit"> / view</span></div>
       <div class="cpv-bar"><div class="cpv-fill" style="width:${Math.round(ratio*100)}%;background:${under?'var(--good)':'var(--bad)'}"></div></div>
       <div class="cpv-legend"><span>Das Paisa target ₹${c.target_short.toFixed(2)} (short)</span><span>${under?(c.target_short/c.cpv).toFixed(1)+'× better':''}</span></div>
-      <div class="cpv-meta"><div><div class="cpv-m-v">${rupee(c.cost)}</div><div class="cpv-m-l">Spend · ${c.count} entries</div></div><div><div class="cpv-m-v">${fmt(c.views)}</div><div class="cpv-m-l">Total views</div></div></div></div>
-    <div class="panel"><div class="panel-head"><div><div class="panel-title">Spend by month</div><div class="panel-sub">Builders.mu content expenses</div></div></div><div class="mbars">${mbars}</div></div></div>`;
+      <div class="cpv-meta"><div><div class="cpv-m-v">${rupL(c.cost)}</div><div class="cpv-m-l">Content spend · ${c.count} lines</div></div><div><div class="cpv-m-v">${fmt(c.views)}</div><div class="cpv-m-l">Total views</div></div></div>
+      <p class="note" style="margin-top:10px">Cost from the FY26 + FY27 Expense Master · Content ledger for ${c.tag}.</p></div>
+    <div class="panel"><div class="panel-head"><div><div class="panel-title">CPV by month</div><div class="panel-sub">Month spend ÷ views of reels posted that month</div></div><span class="panel-tag">Per month</span></div>
+      <table class="cpvm-table"><thead><tr><th>Month</th><th>Spend</th><th>Views</th><th>CPV</th></tr></thead><tbody>${rows||'<tr><td colspan="4">No monthly data.</td></tr>'}</tbody></table></div></div>`;
+}
+function podExpenseHtml(p,id){
+  const pe=isLive()&&LIVE.pods&&LIVE.pods[id]&&LIVE.pods[id].pod_expense;if(!pe||!pe.count)return '';
+  const bym=pe.by_month||[];const maxM=Math.max(1,...bym.map(m=>m.amount));
+  const ml=m=>{const[y,mo]=m.split('-');return ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+mo]+" '"+y.slice(2);};
+  const monthBars=bym.map(m=>`<div class="mbar"><div class="mbar-k" style="width:58px">${ml(m.month)}</div><div class="mbar-track"><div class="mbar-fill" style="width:${Math.round(m.amount/maxM*100)}%"></div></div><div class="mbar-v">${rupL(m.amount)}</div></div>`).join('');
+  const vend=(pe.top_vendors||[]).map(v=>`<div class="ig-top-row" style="cursor:default"><span class="ig-top-cap">${v.vendor}</span><span class="ig-top-l">${rupL(v.amount)}</span></div>`).join('');
+  return `<div class="panel-row two">
+    <div class="panel"><div class="panel-head"><div><div class="panel-title">Pod spend</div><div class="panel-sub">${p.name} · Expense Master · ${pe.count} line items</div></div><span class="panel-tag">${rupL(pe.total_gst)}</span></div>
+      <div class="cpv-meta" style="border:0;padding:0 0 14px"><div><div class="cpv-m-v">${rupL(pe.total_gst)}</div><div class="cpv-m-l">All-time · incl GST</div></div><div><div class="cpv-m-v">${rupL(pe.total_nogst)}</div><div class="cpv-m-l">excl GST</div></div></div>
+      <div class="mbars">${monthBars||'<p class="note">No dated spend.</p>'}</div></div>
+    <div class="panel"><div class="panel-head"><div><div class="panel-title">Top vendors</div><div class="panel-sub">Who ${p.name} pays</div></div><span class="panel-tag">Spend</span></div>
+      <div class="ig-top" style="margin-top:4px">${vend||'<p class="note">No vendor data.</p>'}</div></div></div>`;
 }
 function projectUpdatesHtml(p,id){
   if(!(isLive()&&LIVE.pods&&LIVE.pods[id]))return '';
@@ -1843,6 +1888,7 @@ function renderPod(id){
         </div>
         ${instaStatsHtml(p,id)}
         ${cpvHtml(p,id)}
+        ${podExpenseHtml(p,id)}
         ${projectUpdatesHtml(p,id)}
         <div class="panel-row full"><div class="panel">${ghost}<div class="panel-head"><div><div class="panel-title">Gallery preview</div><div class="panel-sub">A peek at what ${p.name} looks like</div></div><span class="panel-tag" data-tab2="gallery" style="cursor:pointer">Open gallery →</span></div><div class="gal-grid yt">${t}</div></div></div>`;
       init=()=>{charts.push(lineChart(document.getElementById('podTrend').getContext('2d'),model.L,model.trend,model.trendLabel,C.cyan));};
