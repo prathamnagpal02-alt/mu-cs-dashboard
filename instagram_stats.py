@@ -34,6 +34,37 @@ CACHE_DIR = Path(__file__).parent / "ig_cache"
 ACTOR = "apify~instagram-scraper"
 BASE = "https://api.apify.com/v2/acts/" + ACTOR + "/run-sync-get-dataset-items"
 
+# Hard spend cap for the testing phase. The script refuses to scrape once the
+# month's Apify usage is within one run (~$0.15) of this cap, so it can never
+# quietly blow the budget — e.g. from the Refresh batch. Override via env if needed.
+BUDGET_USD = float(os.environ.get("APIFY_BUDGET_USD", "2.0"))
+RUN_BUFFER = 0.20
+
+
+def monthly_usage_usd():
+    """Apify spend so far this billing cycle, or None if it can't be read."""
+    try:
+        with urllib.request.urlopen(
+                f"https://api.apify.com/v2/users/me/limits?token={APIFY_TOKEN}", timeout=20) as r:
+            return json.load(r)["data"]["current"]["monthlyUsageUsd"]
+    except Exception:
+        return None
+
+
+def check_budget():
+    """Returns spend; raises if continuing could exceed BUDGET_USD."""
+    usage = monthly_usage_usd()
+    if usage is None:
+        print("  (could not read Apify usage; proceeding — one run is ~$0.10)")
+        return None
+    print(f"Apify spend this cycle: ${usage:.2f} of ${BUDGET_USD:.2f} cap "
+          f"(plan includes $5/mo free credit).")
+    if usage >= BUDGET_USD - RUN_BUFFER:
+        raise RuntimeError(
+            f"STOP: Apify usage ${usage:.2f} is at the ${BUDGET_USD:.2f} testing cap. "
+            f"Not scraping. Raise APIFY_BUDGET_USD in .env or wait for the monthly reset.")
+    return usage
+
 
 def _run(payload, timeout=600):
     url = BASE + "?token=" + APIFY_TOKEN
@@ -48,6 +79,7 @@ def scrape(handle, results_limit=400):
     """Returns a dict with profile + reels, ready to cache."""
     if not APIFY_TOKEN:
         raise RuntimeError("APIFY_TOKEN missing from .env")
+    check_budget()   # refuses to run if it would breach the spend cap
     profile_url = f"https://www.instagram.com/{handle}/"
 
     print(f"[{handle}] scraping posts (limit {results_limit})...")
