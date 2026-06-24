@@ -1332,7 +1332,33 @@ function initSearch(){
 }
 
 function igPosts(h){const r=seed('igp'+h+state.range);const T=['Reel','Reel','Post','Reel','Story','Post','Reel','Carousel'];const N=['Hook','BTS','Explainer','Trend jack','Announcement','Tutorial','Quote card','Recap'];return Array.from({length:8},(_,i)=>({title:N[i%N.length],type:T[i%T.length],imp:Math.round(20000+r()*400000),views:Math.round(8000+r()*250000),ctr:(1.5+r()*4).toFixed(1),comments:Math.round(50+r()*3000),saves:Math.round(80+r()*9000),shares:Math.round(40+r()*6000),reposts:Math.round(10+r()*800)}));}
+function liveInsta(h){
+  if(!isLive()||!LIVE.pods)return null;
+  const pid=Object.keys(LIVE.pods).find(k=>LIVE.pods[k].insta&&LIVE.pods[k].insta.handle===h);
+  return pid?{pid:pid,ig:LIVE.pods[pid].insta,cpv:LIVE.pods[pid].cpv}:null;
+}
+function igLiveDetail(h,pid){
+  const p=PODS[pid];const model=liveModel(pid);
+  document.getElementById('crumbs').innerHTML='Studio &nbsp;›&nbsp; <b>Instagram</b> &nbsp;›&nbsp; @'+h;
+  const grad=`linear-gradient(150deg,${C.cyan},${C.orange})`;
+  const kpiHtml='<div class="kpi-row">'+model.kpis.map(k=>`<div class="kpi ${k.c}"><div class="lbl">${k.l}</div><div class="val">${k.v}</div><div class="ul"></div><div class="delta">${k.dtext!==undefined?k.dtext:delta(k.d)}</div></div>`).join('')+'</div>';
+  const v=munimPod(p,model,pid);
+  const verdict=`<div class="munim"><span class="munim-tag">MU<span class="nm">नीम</span></span><div class="munim-body"><p>${v.read}</p><p class="munim-sg"><span class="sg-tag">Munim suggests</span>${v.suggest}</p></div></div>`;
+  document.getElementById('content').innerHTML=`
+   <div class="crumbback" data-igback>← All Instagram</div>
+   <div class="detail-hero">${phoneMock('',grad,'@'+h)}<div class="dh-meta"><div class="eyebrow">Instagram · ours</div><h2>@${h}</h2><div class="desc">${p.desc}</div><span class="status-pill live"><span class="d"></span>Tracking · live</span></div></div>
+   ${verdict}
+   ${kpiHtml}
+   ${instaStatsHtml(p,pid)}
+   ${cpvHtml(p,pid)}
+   ${projectUpdatesHtml(p,pid)}
+   ${igGalleryHtml(p,pid)}`;
+  hydrateInsights();
+  document.querySelectorAll('[data-go]').forEach(el=>el.onclick=()=>{state.view=el.dataset.go;render();window.scrollTo({top:0});});
+}
 function igDetail(h){
+  const live=liveInsta(h);
+  if(live)return igLiveDetail(h,live.pid);
   const p=IGP.find(x=>x.h===h)||IGP[0];const s=igStats(h);const grad=p.own?`linear-gradient(150deg,${C.cyan},${C.orange})`:`linear-gradient(150deg,#b8b2a3,#8b8576)`;
   document.getElementById('crumbs').innerHTML='Studio &nbsp;›&nbsp; <b>Instagram</b> &nbsp;›&nbsp; @'+h;
   const rows=igPosts(h).map(po=>`<tr><td class="name">${po.title}</td><td>${po.type}</td><td class="num">${fmt(po.imp)}</td><td class="num">${fmt(po.views)}</td><td class="num">${po.ctr}%</td><td class="num">${fmt(po.comments)}</td><td class="num">${fmt(po.saves)}</td><td class="num">${fmt(po.shares)}</td><td class="num">${fmt(po.reposts)}</td></tr>`).join('');
@@ -1372,7 +1398,8 @@ function renderInstagram(){
   const sFoll=agg.reduce((a,b)=>a+b.foll,0),sImp=agg.reduce((a,b)=>a+b.imp,0),sViews=agg.reduce((a,b)=>a+b.views,0),sSaves=agg.reduce((a,b)=>a+b.saves,0),sShares=agg.reduce((a,b)=>a+b.shares,0);
   const posts=Math.round(40+seed('igposts'+r)()*120),cpv=(0.04+seed('igcpv'+r)()*0.12).toFixed(2),ctr=(2+seed('igctr'+r)()*3).toFixed(1);
   const cards=IGP.map(p=>{const s=igStats(p.h);const grad=p.own?`linear-gradient(150deg,${C.cyan},${C.orange})`:`linear-gradient(150deg,#b8b2a3,#8b8576)`;
-    const cells=[['Followers',fmt(s.foll)],['Impressions',fmt(s.imp)],['Views',fmt(s.views)],['CTR',s.ctr+'%'],['Comments',fmt(s.comments)],['Saves',fmt(s.saves)],['Shares',fmt(s.shares)],['Reposts',fmt(s.reposts)]];
+    const li=liveInsta(p.h);
+    const cells=li?[['Followers',fmt(li.ig.followers)],['Total views',fmt(li.ig.total_views)],['Reels',li.ig.reels_count],['Engagement',li.ig.engagement_rate+'%'],['Likes',fmt(li.ig.total_likes)],['Comments',fmt(li.ig.total_comments)],['Avg views',fmt(li.ig.avg_views)],['CPV',li.cpv?'₹'+li.cpv.cpv.toFixed(3):'—']]:[['Followers',fmt(s.foll)],['Impressions',fmt(s.imp)],['Views',fmt(s.views)],['CTR',s.ctr+'%'],['Comments',fmt(s.comments)],['Saves',fmt(s.saves)],['Shares',fmt(s.shares)],['Reposts',fmt(s.reposts)]];
     return `<div class="ch-card${p.own?'':' off'}" data-ig="${p.h}" style="cursor:pointer">${phoneMock(p.vid,grad,'@'+p.h)}
       <div class="ch-meta"><div class="ch-top"><div><div class="ch-name">@${p.h}</div><div class="ch-lead">${p.lead}</div></div>${p.own?'<span class="status-pill live"><span class="d"></span>Ours</span>':'<span class="status-pill build"><span class="d"></span>Watching</span>'}</div>
       <div class="ch-stats">${cells.map(x=>`<div><div class="cv">${x[1]}</div><div class="cl">${x[0]}</div></div>`).join('')}</div></div></div>`;}).join('');

@@ -59,6 +59,16 @@ POD_EXPENSE_TAG = {"builders": "builders.mu"}   # matches "Builders.mu / Student
 IG_CACHE_DIR = Path(__file__).parent / "ig_cache"
 CPV_TARGET_SHORT = 0.10   # Das Paisa: short form
 CPV_TARGET_LONG = 1.0     # long form
+# Which Apify field to treat as "Views". Instagram's in-app "Views" (2024+) is
+# the play-inclusive number -> 'plays' (videoPlayCount). Set to 'legacy' to use
+# the smaller videoViewCount instead. Flippable from cache, no re-scrape needed.
+IG_VIEWS_METRIC = os.environ.get("IG_VIEWS_METRIC", "plays")
+
+
+def _reel_views(r):
+    if IG_VIEWS_METRIC == "legacy":
+        return r.get("view_count_legacy") or r.get("plays") or 0
+    return r.get("plays") or r.get("view_count_legacy") or 0
 INFLUENCER_SHEET_ID = "1RCMD8DHsIVBnwrIfl_2qgvt0LQZaUG2eoDFLwwuHano"
 
 # ── Production pods (mirror mcp_server.py / dashboard.py) ────────────────────
@@ -588,7 +598,7 @@ def build_insta(pod_id, items):
         return None
     reels = ig["reels"]
     by_code = {r["shortCode"]: r for r in reels}
-    total_views = sum(r["views"] for r in reels)
+    total_views = sum(_reel_views(r) for r in reels)
     total_likes = sum(r["likes"] for r in reels)
     total_comments = sum(r["comments"] for r in reels)
     # merge per-reel performance into the project items (matched by shortcode)
@@ -596,11 +606,11 @@ def build_insta(pod_id, items):
     for it in items:
         r = by_code.get(it.get("reel_code"))
         if r:
-            it["views"] = r["views"]
+            it["views"] = _reel_views(r)
             it["likes"] = r["likes"]
             it["comments"] = r["comments"]
             matched += 1
-    top = sorted(reels, key=lambda r: r["views"], reverse=True)[:5]
+    top = sorted(reels, key=_reel_views, reverse=True)[:5]
     return {
         "handle": handle,
         "followers": ig.get("followers"),
@@ -612,8 +622,9 @@ def build_insta(pod_id, items):
         "engagement_rate": round((total_likes + total_comments) / total_views * 100, 2) if total_views else None,
         "matched_to_sheet": matched,
         "scraped_at": ig.get("scraped_at"),
-        "top": [{"code": r["shortCode"], "views": r["views"], "likes": r["likes"],
+        "top": [{"code": r["shortCode"], "views": _reel_views(r), "likes": r["likes"],
                  "comments": r["comments"], "url": r.get("url"), "caption": r.get("caption", "")} for r in top],
+        "views_metric": IG_VIEWS_METRIC,
     }
 
 
