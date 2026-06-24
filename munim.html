@@ -936,10 +936,10 @@ function liveModel(id){
   let kpis;
   if(p.insta){const ig=p.insta,cv=p.cpv;
     kpis=[
-      {l:'Followers',v:fmt(ig.followers),d:0,c:'',dtext:'<span class="flat">@'+ig.handle+'</span>'},
-      {l:'Total views',v:fmt(ig.total_views),d:0,c:'k',dtext:'<span class="flat">'+ig.reels_count+' reels</span>'},
-      {l:'Engagement',v:ig.engagement_rate+'%',d:0,c:'o',dtext:'<span class="flat">likes+comments / views</span>'},
-      {l:'Cost / view',v:cv?('₹'+cv.cpv.toFixed(3)):'—',d:0,c:'y',dtext:cv?('<span class="'+(cv.cpv<=cv.target_short?'up':'down')+'">target ₹'+cv.target_short.toFixed(2)+'</span>'):flat}
+      {l:'Followers',v:fmt(ig.followers),d:0,c:'',dtext:'<span class="flat">@'+ig.handle+' · current</span>'},
+      {l:'Views',v:fmt(ig.total_views),d:0,c:'k',dtext:'<span class="flat">'+ig.reels_count+' reels · '+state.range+'</span>'},
+      {l:'Likes',v:fmt(ig.total_likes),d:0,c:'o',dtext:'<span class="flat">'+state.range+'</span>'},
+      {l:'Cost / view',v:(cv&&cv.cpv!=null)?('₹'+cv.cpv.toFixed(3)):'—',d:0,c:'y',dtext:cv?('<span class="'+(cv.cpv<=cv.target_short?'up':'down')+'">'+(cv.scope==='all-time'?'all-time · ':state.range+' · ')+'target ₹'+cv.target_short.toFixed(2)+'</span>'):flat}
     ];
   } else {
     kpis=[
@@ -1670,7 +1670,7 @@ function instaStatsHtml(p,id){
   const esc=s=>String(s||'').replace(/</g,'&lt;');
   const top=(ig.top||[]).map((r,i)=>`<a class="ig-top-row" href="${r.url}" target="_blank" rel="noopener"><span class="ig-rank">${i+1}</span><span class="ig-top-cap">${esc(r.caption)||'Reel'}</span><span class="ig-top-v">${fmt(r.views)} views</span><span class="ig-top-l">${fmt(r.likes)} likes</span></a>`).join('');
   return `<div class="panel-row full"><div class="panel">
-    <div class="panel-head"><div><div class="panel-title">Overall Instagram Stats</div><div class="panel-sub">@${ig.handle} · ${ig.reels_count} reels · scraped ${new Date(ig.scraped_at).toLocaleDateString('en-GB')}</div></div><span class="panel-tag" style="border-color:var(--good);color:var(--good)">Live</span></div>
+    <div class="panel-head"><div><div class="panel-title">Overall Instagram Stats</div><div class="panel-sub">@${ig.handle} · ${ig.reels_count} reels posted in ${state.range} · followers are current · scraped ${new Date(ig.scraped_at).toLocaleDateString('en-GB')}</div></div><span class="panel-tag" style="border-color:var(--good);color:var(--good)">Live · ${state.range}</span></div>
     <div class="ig-stat-grid">${tiles.map(t=>`<div class="ig-stat"><div class="ig-stat-v">${t[1]}</div><div class="ig-stat-l">${t[0]}</div></div>`).join('')}</div>
     <div class="ig-top"><div class="ig-top-h">Top reels by views</div>${top}</div></div></div>`;
 }
@@ -1681,7 +1681,8 @@ function cpvHtml(p,id){
   const months=Object.entries(c.by_month||{});const maxM=Math.max(1,...months.map(m=>m[1]));
   const mbars=months.map(([k,v])=>`<div class="mbar"><div class="mbar-k">${k}</div><div class="mbar-track"><div class="mbar-fill" style="width:${Math.round(v/maxM*100)}%"></div></div><div class="mbar-v">${rupee(v)}</div></div>`).join('')||'<p class="note">No dated expenses.</p>';
   return `<div class="panel-row two">
-    <div class="panel"><div class="panel-head"><div><div class="panel-title">CPV · Cost per view</div><div class="panel-sub">${c.tag} spend ÷ total views</div></div><span class="panel-tag" style="border-color:${under?'var(--good)':'var(--bad)'};color:${under?'var(--good)':'var(--bad)'}">${under?'Under target':'Over target'}</span></div>
+    <div class="panel"><div class="panel-head"><div><div class="panel-title">CPV · Cost per view</div><div class="panel-sub">${c.tag} spend ÷ views · ${c.scope==='all-time'?'all-time':state.range}</div></div><span class="panel-tag" style="border-color:${under?'var(--good)':'var(--bad)'};color:${under?'var(--good)':'var(--bad)'}">${under?'Under target':'Over target'}</span></div>
+      ${c.scope==='all-time'?'<p class="note" style="margin:0 0 8px">No expenses logged in '+state.range+' (invoices lag reels by months), so this shows the all-time CPV.</p>':''}
       <div class="cpv-big">₹${c.cpv.toFixed(3)}<span class="cpv-unit"> / view</span></div>
       <div class="cpv-bar"><div class="cpv-fill" style="width:${Math.round(ratio*100)}%;background:${under?'var(--good)':'var(--bad)'}"></div></div>
       <div class="cpv-legend"><span>Das Paisa target ₹${c.target_short.toFixed(2)} (short)</span><span>${under?(c.target_short/c.cpv).toFixed(1)+'× better':''}</span></div>
@@ -2059,7 +2060,28 @@ function initMobile(){
   const sc=document.getElementById('drawerScrim');if(sc)sc.onclick=closeDrawer;
   const x=document.getElementById('drawerX');if(x)x.onclick=closeDrawer;
 }
-function render(){const lb=document.getElementById('loadbar');if(lb){lb.classList.remove('go');void lb.offsetWidth;lb.classList.add('go');}if(state.view!==lastView){state.tab='overview';state.igSel=null;state.ytSel=null;lastView=state.view;}destroyCharts();buildNav();const v=state.view;if(v==='overview')renderOverview();else if(v==='compare')renderCompare();else if(v==='fieldguide')renderFieldGuide();else if(v==='sheets')renderSheets();else if(v==='igpage')renderInstagram();else if(v==='ytpage')renderYouTube();else if(v==='coverage')renderCoverage();else if(v==='expense')renderExpense();else if(v.indexOf('block:')===0)renderBlock(v.slice(6));else if(v.indexOf('dept:')===0){const a=v.split(':');renderDept(a[1],+a[2]);}else renderPod(v);injectAmbient(v);syncMobile();hydrateInsights();}
+function render(){const lb=document.getElementById('loadbar');if(lb){lb.classList.remove('go');void lb.offsetWidth;lb.classList.add('go');}if(state.view!==lastView){state.tab='overview';state.igSel=null;state.ytSel=null;lastView=state.view;}destroyCharts();buildNav();const v=state.view;if(v==='overview')renderOverview();else if(v==='compare')renderCompare();else if(v==='fieldguide')renderFieldGuide();else if(v==='sheets')renderSheets();else if(v==='igpage')renderInstagram();else if(v==='ytpage')renderYouTube();else if(v==='coverage')renderCoverage();else if(v==='expense')renderExpense();else if(v.indexOf('block:')===0)renderBlock(v.slice(6));else if(v.indexOf('dept:')===0){const a=v.split(':');renderDept(a[1],+a[2]);}else renderPod(v);injectAmbient(v);syncMobile();hydrateInsights();syncHash();}
+function currentHash(){
+  let parts=[state.view];
+  if(state.view==='igpage'&&state.igSel)parts.push(state.igSel);
+  else if(state.view==='ytpage'&&state.ytSel)parts.push(state.ytSel);
+  else if(PODS[state.view]&&state.tab&&state.tab!=='overview')parts.push(state.tab);
+  return '#'+parts.map(encodeURIComponent).join('/');
+}
+function syncHash(){const h=currentHash();if(location.hash!==h)history.replaceState(null,'',h);}
+function applyHash(){
+  const raw=location.hash.replace(/^#\/?/,'');
+  if(!raw)return false;
+  const parts=raw.split('/').map(s=>{try{return decodeURIComponent(s);}catch(e){return s;}});
+  const v=parts[0],sub=parts[1];
+  state.igSel=null;state.ytSel=null;state.tab='overview';state.view=v;
+  if(v==='igpage'&&sub)state.igSel=sub;
+  else if(v==='ytpage'&&sub)state.ytSel=sub;
+  else if(PODS[v]&&sub)state.tab=sub;
+  lastView=state.view;
+  return true;
+}
+window.addEventListener('hashchange',function(){if(location.hash!==currentHash()){applyHash();render();window.scrollTo({top:0});}});
 (function(){
   const dr=document.getElementById('daterange'),trig=document.getElementById('drTrigger'),pop=document.getElementById('drPop'),lbl=document.getElementById('drLabel');
   const close=()=>dr.classList.remove('open');
@@ -2071,6 +2093,7 @@ function render(){const lb=document.getElementById('loadbar');if(lb){lb.classLis
 document.addEventListener('click',e=>{const ig=e.target.closest('[data-ig]');if(ig){state.igSel=ig.dataset.ig;render();window.scrollTo({top:0});return;}const yt=e.target.closest('[data-yt]');if(yt){state.ytSel=yt.dataset.yt;render();window.scrollTo({top:0});return;}if(e.target.closest('[data-igback]')){state.igSel=null;render();window.scrollTo({top:0});return;}if(e.target.closest('[data-ytback]')){state.ytSel=null;render();window.scrollTo({top:0});return;}});
 initMobile();
 initSearch();
+applyHash();
 render();
 fetchLive();
 </script>

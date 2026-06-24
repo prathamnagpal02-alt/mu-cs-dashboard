@@ -571,25 +571,44 @@ def load_ig_stats(handle):
     return None
 
 
+def _reel_date(r):
+    t = r.get("timestamp")
+    if not t:
+        return None
+    try:
+        return datetime.fromisoformat(str(t).replace("Z", "+00:00")).date()
+    except Exception:
+        return None
+
+
 def pod_expenses(tag_substr):
-    """Sum Content-Expenses rows whose 'Pod' dropdown contains tag_substr.
-    Returns total (with GST), count, and a month-by-month breakdown."""
+    """Content-Expenses rows whose 'Pod' dropdown contains tag_substr, with each
+    row's date + amount so callers can window them. Amount = with GST."""
     rows = fetch_latest_rows("Content Expenses", SALARIES_SHEET_ID)
-    matched = [r for r in rows if tag_substr.lower() in str(r.get("Pod", "") or "").lower()]
-    total = sum(_money(r.get("Amount with GST")) for r in matched)
+    matched = []
+    for r in rows:
+        if tag_substr.lower() not in str(r.get("Pod", "") or "").lower():
+            continue
+        d = (parse_date_str(r.get("Date of Incurring the Expense"))
+             or parse_date_str(r.get("Date of Shoot"))
+             or parse_date_str(r.get("Date of Payment")))
+        matched.append({"date": d, "amount": _money(r.get("Amount with GST")),
+                        "pod": str(r.get("Pod", "")).strip()})
     by_month = {}
-    for r in matched:
-        d = parse_date_str(r.get("Date of Incurring the Expense")) or \
-            parse_date_str(r.get("Date of Shoot")) or parse_date_str(r.get("Date of Payment"))
-        amt = _money(r.get("Amount with GST"))
-        if d:
-            key = d.strftime("%b %Y")
-            by_month[key] = by_month.get(key, 0) + amt
-    tag = matched[0].get("Pod", "").strip() if matched else tag_substr
-    return {"total": round(total), "count": len(matched), "by_month": by_month, "tag": tag}
+    for m in matched:
+        if m["date"]:
+            k = m["date"].strftime("%b %Y")
+            by_month[k] = by_month.get(k, 0) + m["amount"]
+    return {
+        "total": round(sum(m["amount"] for m in matched)),
+        "count": len(matched),
+        "by_month": by_month,
+        "tag": matched[0]["pod"] if matched else tag_substr,
+        "rows": matched,
+    }
 
 
-def build_insta(pod_id, items):
+def build_insta(pod_id, items, start=None, today=None):
     handle = POD_IG.get(pod_id)
     if not handle:
         return None
@@ -598,10 +617,7 @@ def build_insta(pod_id, items):
         return None
     reels = ig["reels"]
     by_code = {r["shortCode"]: r for r in reels}
-    total_views = sum(_reel_views(r) for r in reels)
-    total_likes = sum(r["likes"] for r in reels)
-    total_comments = sum(r["comments"] for r in reels)
-    # merge per-reel performance into the project items (matched by shortcode)
+    # merge each reel's OWN total performance into the project items (window-independent)
     matched = 0
     for it in items:
         r = by_code.get(it.get("reel_code"))
@@ -610,35 +626,57 @@ def build_insta(pod_id, items):
             it["likes"] = r["likes"]
             it["comments"] = r["comments"]
             matched += 1
-    top = sorted(reels, key=_reel_views, reverse=True)[:5]
+    # window the reels by upload date for the headline stats
+    if start and today:
+        win = [r for r in reels if (_reel_date(r) and start <= _reel_date(r) <= today)]
+    else:
+        win = reels
+    total_views = sum(_reel_views(r) for r in win)
+    total_likes = sum(r["likes"] for r in win)
+    total_comments = sum(r["comments"] for r in win)
+    top = sorted(win, key=_reel_views, reverse=True)[:5]
     return {
         "handle": handle,
-        "followers": ig.get("followers"),
-        "reels_count": len(reels),
+        "followers": ig.get("followers"),          # current / point-in-time (not windowable)
+        "reels_count": len(win),
+        "reels_total": len(reels),
         "total_views": total_views,
         "total_likes": total_likes,
         "total_comments": total_comments,
-        "avg_views": round(total_views / len(reels)) if reels else 0,
+        "total_views_alltime": sum(_reel_views(r) for r in reels),
+        "avg_views": round(total_views / len(win)) if win else 0,
         "engagement_rate": round((total_likes + total_comments) / total_views * 100, 2) if total_views else None,
+        "windowed": bool(start and today),
         "matched_to_sheet": matched,
         "scraped_at": ig.get("scraped_at"),
+        "views_metric": IG_VIEWS_METRIC,
         "top": [{"code": r["shortCode"], "views": _reel_views(r), "likes": r["likes"],
                  "comments": r["comments"], "url": r.get("url"), "caption": r.get("caption", "")} for r in top],
-        "views_metric": IG_VIEWS_METRIC,
     }
 
 
-def build_cpv(pod_id, insta):
-    if not insta or not insta.get("total_views"):
+def build_cpv(pod_id, insta, start=None, today=None):
+    if not insta:
         return None
     tag = POD_EXPENSE_TAG.get(pod_id)
     if not tag:
         return None
     exp = pod_expenses(tag)
-    views = insta["total_views"]
-    cpv = exp["total"] / views if views else None
+    # spend within the window (by incur date)
+    if start and today:
+        wrows = [m for m in exp["rows"] if m["date"] and start <= m["date"] <= today]
+        wcost, wcount = round(sum(m["amount"] for m in wrows)), len(wrows)
+    else:
+        wcost, wcount = exp["total"], exp["count"]
+    views_win = insta.get("total_views") or 0
+    if wcost > 0 and views_win > 0:
+        cost, views, count, scope = wcost, views_win, wcount, "range"
+    else:
+        # expenses lag the reels — fall back to the lifetime CPV so it never shows ₹0
+        cost, views, count, scope = exp["total"], insta.get("total_views_alltime") or 0, exp["count"], "all-time"
+    cpv = cost / views if views else None
     return {
-        "cost": exp["total"], "views": views, "count": exp["count"], "tag": exp["tag"],
+        "cost": cost, "views": views, "count": count, "tag": exp["tag"], "scope": scope,
         "cpv": round(cpv, 3) if cpv is not None else None,
         "target_short": CPV_TARGET_SHORT, "target_long": CPV_TARGET_LONG,
         "by_month": exp["by_month"],
@@ -699,10 +737,10 @@ def _build_data_inner(days):
         # Instagram performance (Apify) + CPV (expense sheet ÷ views)
         mid = ops["munim_id"]
         if mid and mid in POD_IG:
-            insta = build_insta(mid, ops["items"])
+            insta = build_insta(mid, ops["items"], start, today)
             if insta:
                 ops["insta"] = insta
-                ops["cpv"] = build_cpv(mid, insta)
+                ops["cpv"] = build_cpv(mid, insta, start, today)
         if ops["munim_id"]:
             pods[ops["munim_id"]] = ops
         sc = ops["win_status_counts"]
