@@ -66,6 +66,14 @@ def main():
     except Exception as e:
         print(f"  (skipped expense.json: {e})")
 
+    # Encrypted salaries (key -1) -> data/salaries.enc.json (ciphertext only)
+    try:
+        files.append({"file": "data/salaries.enc.json",
+                      "data": json.dumps(fetch_tray(-1)), "encoding": "utf-8"})
+        print("  bundled data/salaries.enc.json (encrypted)")
+    except Exception as e:
+        print(f"  (skipped salaries: {e})")
+
     print("Deploying to Cohesivity hosting (static)...")
     resp = _post(f"{BASE}/api/vercel/deploy?wait=ready",
                  {"files": files}, auth=C["coh_management_key"])

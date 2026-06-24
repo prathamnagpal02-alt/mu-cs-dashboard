@@ -991,6 +991,44 @@ def content_pod_expense(canon, start=None, today=None):
     }
 
 
+def build_salaries():
+    """Sensitive salary payload (per-employee CTC + pod-wise monthly). Returned
+    in plaintext here; encrypted with the PIN before it ever leaves the build."""
+    emp_rows = fetch_latest_rows("Salary Data", SALARIES_SHEET_ID)
+    pod_rows = fetch_latest_rows("Pod-Wise Salary | MoM Split", SALARIES_SHEET_ID)
+    employees = []
+    for r in emp_rows:
+        name = _g(r, "NAME")
+        if not name:
+            continue
+        employees.append({
+            "name": name, "role": _g(r, "DESIGNATION", "ROLE"),
+            "pod": _g(r, "Pod Name"), "dept": _g(r, "DEPARTMENT"),
+            "total_ctc": round(_money(r.get(" TOTAL CTC ") or r.get("TOTAL CTC"))),
+            "fixed": round(_money(r.get(" FIXED CTC ") or r.get("FIXED CTC"))),
+            "variable": round(_money(r.get(" VARIABLE ") or r.get("VARIABLE"))),
+            "doj": _g(r, "DOJ"), "manager": _g(r, "REPORTING MANAGER"),
+        })
+    months = ["April ", "May", "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec", "Jan", "Feb", "March"]
+    sumcols = ["SUM of " + m for m in months]
+    latest = next((c for c in reversed(sumcols) if any(_money(r.get(c)) for r in pod_rows)), None)
+    by_pod = []
+    for r in pod_rows:
+        pod = _g(r, "Pod Name")
+        amt = _money(r.get(latest)) if latest else 0
+        if pod and amt:
+            by_pod.append({"pod": pod, "monthly": round(amt)})
+    by_pod.sort(key=lambda x: -x["monthly"])
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "headcount": len(employees),
+        "total_monthly": sum(p["monthly"] for p in by_pod),
+        "latest_month": (latest or "").replace("SUM of", "").strip(),
+        "by_pod": by_pod,
+        "employees": sorted(employees, key=lambda e: -e["total_ctc"]),
+    }
+
+
 def build_expense():
     master = {}
     master_source = {}

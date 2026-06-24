@@ -681,6 +681,13 @@ body{font-family:var(--sans);font-weight:400;color:var(--ink);background:var(--p
 .cpvm-table th{font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-2);font-weight:700}
 .cpvm-table td:first-child,.cpvm-table th:first-child{text-align:left;font-family:var(--mono);color:var(--ink-2)}
 .cpvm-table .good{color:var(--good);font-weight:700}.cpvm-table .bad{color:var(--bad);font-weight:700}
+.pin-card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:34px 30px;max-width:420px;margin-top:10px}
+.pin-title{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+.pin-input{width:100%;font-family:var(--mono);font-size:28px;letter-spacing:.4em;text-align:center;color:var(--ink);background:var(--card-hi);border:1px solid var(--line);border-radius:12px;padding:16px}
+.pin-input:focus{outline:none;border-color:var(--cyan)}
+.pin-btn{width:100%;margin-top:14px;padding:14px;border:0;border-radius:12px;background:var(--ink);color:var(--paper);font-family:var(--sans);font-size:14px;font-weight:700;cursor:pointer;transition:.15s}
+.pin-btn:hover{background:var(--cyan-deep)}.pin-btn:disabled{opacity:.6;cursor:default}
+.pin-err{color:var(--bad);font-family:var(--mono);font-size:11px;font-weight:600;margin-top:10px;min-height:14px;text-align:center}
 </style>
 </head>
 <body>
@@ -1269,6 +1276,7 @@ function renderExpense(){
      <div class="exp-grp">${fyBtn('FY26')}${fyBtn('FY27')}</div>
      <div class="exp-grp"><button class="exp-tog${expState.gst?' on':''}" data-expgst="1">Incl. GST</button><button class="exp-tog${!expState.gst?' on':''}" data-expgst="0">Excl. GST</button></div>
      <select class="exp-month" id="expMonthSel">${monthOpts}</select>
+     <button class="exp-tog" data-go="salaries" style="border:1px solid var(--line)">🔒 Salaries</button>
      <span class="exp-note">Month filters pod, vendor, status &amp; line detail. Category/month charts show the whole ${fy}.</span>
    </div>
    <div class="kpi-row">
@@ -1309,6 +1317,55 @@ function renderExpense(){
   document.querySelectorAll('[data-go]').forEach(el=>el.onclick=()=>{state.view=el.dataset.go;render();window.scrollTo({top:0});});
 }
 
+/* ── Salaries · encrypted, PIN-gated (decrypts in-browser via Web Crypto) ── */
+let SAL=null;
+function _b64buf(s){const bin=atob(s);const b=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)b[i]=bin.charCodeAt(i);return b;}
+async function decryptSalaries(pin){
+  const blob=await (await fetch('data/salaries.enc.json?v='+Date.now(),{cache:'no-store'})).json();
+  const km=await crypto.subtle.importKey('raw',new TextEncoder().encode(pin),'PBKDF2',false,['deriveKey']);
+  const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:_b64buf(blob.salt),iterations:blob.iter||100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['decrypt']);
+  const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:_b64buf(blob.iv)},key,_b64buf(blob.ct));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+function salRows(emps){return emps.map(e=>`<tr><td class="name">${e.name}</td><td>${e.role||'—'}</td><td>${e.pod||'—'}</td><td>${e.dept||'—'}</td><td class="num">${e.fixed?rupL(e.fixed):'—'}</td><td class="num">${e.variable?rupL(e.variable):'—'}</td><td class="num">${rupL(e.total_ctc)}</td></tr>`).join('');}
+function renderSalaries(){
+  document.getElementById('crumbs').innerHTML='Studio &nbsp;›&nbsp; <b>Salaries</b>';
+  if(SAL)return renderSalaryData();
+  document.getElementById('content').innerHTML=`
+    <div class="hero"><h1>Salaries, <span class="hl">locked.</span></h1><div class="h-sub">Encrypted · enter the PIN to view</div></div>
+    <div class="pin-card"><div class="pin-title">Salary PIN</div>
+      <input id="pinInput" class="pin-input" type="password" inputmode="numeric" maxlength="16" placeholder="••••" autocomplete="off">
+      <button id="pinGo" class="pin-btn">Unlock</button>
+      <div id="pinErr" class="pin-err"></div>
+      <p class="note" style="margin-top:16px;max-width:420px">Salary figures are encrypted inside the file itself. Without the correct PIN they cannot be read — not on the page, not in dev-tools, not in the network tab.</p></div>`;
+  const inp=document.getElementById('pinInput'),btn=document.getElementById('pinGo'),err=document.getElementById('pinErr');
+  const go=async()=>{err.textContent='';btn.textContent='Unlocking…';btn.disabled=true;
+    try{SAL=await decryptSalaries(inp.value.trim());renderSalaryData();}
+    catch(e){btn.textContent='Unlock';btn.disabled=false;err.textContent='Wrong PIN. Try again.';inp.value='';inp.focus();}};
+  btn.onclick=go;inp.onkeydown=e=>{if(e.key==='Enter')go();};setTimeout(()=>inp.focus(),60);
+}
+function renderSalaryData(){
+  const s=SAL,money=v=>rupL(v);const mx=Math.max(1,...s.by_pod.map(p=>p.monthly));
+  document.getElementById('content').innerHTML=`
+   <div class="hero"><h1>Salaries, <span class="hl">unlocked.</span></h1><div class="h-sub">${s.headcount} people · ${s.latest_month} payroll · <b>${money(s.total_monthly)}</b> / month</div></div>
+   <div class="exp-controls"><button class="exp-tog on" id="salLock">🔒 Lock again</button><span class="exp-note">Decrypted in your browser only · nothing stored · reload re-locks.</span></div>
+   <div class="kpi-row">
+     <div class="kpi"><div class="lbl">Monthly payroll</div><div class="val">${money(s.total_monthly)}</div><div class="ul"></div><div class="delta flat">${s.latest_month}</div></div>
+     <div class="kpi k"><div class="lbl">Headcount</div><div class="val">${s.headcount}</div><div class="ul"></div><div class="delta flat">on roll</div></div>
+     <div class="kpi o"><div class="lbl">Annualised</div><div class="val">${money(s.total_monthly*12)}</div><div class="ul"></div><div class="delta flat">run-rate</div></div>
+     <div class="kpi y"><div class="lbl">Avg / person</div><div class="val">${money(s.total_monthly/(s.headcount||1))}</div><div class="ul"></div><div class="delta flat">monthly</div></div>
+   </div>
+   <div class="panel-row two">
+     <div class="panel"><div class="panel-head"><div><div class="panel-title">Payroll by pod</div><div class="panel-sub">${s.latest_month} monthly salary</div></div><span class="panel-tag">${money(s.total_monthly)}</span></div>
+       <div class="mbars" style="margin-top:4px">${s.by_pod.map(p=>`<div class="mbar"><div class="mbar-k" style="width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.pod}</div><div class="mbar-track"><div class="mbar-fill" style="width:${Math.round(p.monthly/mx*100)}%"></div></div><div class="mbar-v">${money(p.monthly)}</div></div>`).join('')}</div></div>
+     <div class="panel"><div class="panel-head"><div><div class="panel-title">Top CTCs</div><div class="panel-sub">Highest annual cost to company</div></div></div>
+       <div class="ig-top" style="margin-top:4px">${s.employees.slice(0,8).map(e=>`<div class="ig-top-row" style="cursor:default"><span class="ig-top-cap">${e.name} · ${e.role||''}</span><span class="ig-top-l">${money(e.total_ctc)}</span></div>`).join('')}</div></div>
+   </div>
+   <div class="panel-row full"><div class="panel"><span class="ghost">₹</span><div class="panel-head"><div><div class="panel-title">Everyone</div><div class="panel-sub">${s.headcount} people · annual CTC</div></div><input class="exp-search" id="salSearch" placeholder="Search name, role, pod…"></div>
+     <table class="tbl"><thead><tr><th>Name</th><th>Designation</th><th>Pod</th><th>Dept</th><th>Fixed</th><th>Variable</th><th>Total CTC</th></tr></thead><tbody id="salBody">${salRows(s.employees)}</tbody></table></div></div>`;
+  document.getElementById('salLock').onclick=()=>{SAL=null;state.view='expense';render();window.scrollTo({top:0});};
+  const ss=document.getElementById('salSearch');if(ss)ss.oninput=()=>{const q=ss.value.toLowerCase();document.getElementById('salBody').innerHTML=salRows(s.employees.filter(e=>((e.name||'')+' '+(e.role||'')+' '+(e.pod||'')+' '+(e.dept||'')).toLowerCase().includes(q)));};
+}
 function podMini(id){const p=PODS[id];if(!p)return '';return `<div class="pod-card" data-go="${id}"><div class="pc-top"><div class="pc-name">${p.name}</div>${statusIcon(p.status)}</div><div class="pc-meta">${p.code} · ${p.head}</div><div class="pc-desc">${p.desc||''}</div><div class="pc-go">Open pod →</div></div>`;}
 function renderBlock(id){
   const b=BLOCKS.find(x=>x.id===id);if(!b){renderFieldGuide();return;}
@@ -2150,7 +2207,7 @@ function initMobile(){
   const sc=document.getElementById('drawerScrim');if(sc)sc.onclick=closeDrawer;
   const x=document.getElementById('drawerX');if(x)x.onclick=closeDrawer;
 }
-function render(){const lb=document.getElementById('loadbar');if(lb){lb.classList.remove('go');void lb.offsetWidth;lb.classList.add('go');}if(state.view!==lastView){state.tab='overview';state.igSel=null;state.ytSel=null;lastView=state.view;}destroyCharts();buildNav();const v=state.view;if(v==='overview')renderOverview();else if(v==='compare')renderCompare();else if(v==='fieldguide')renderFieldGuide();else if(v==='sheets')renderSheets();else if(v==='igpage')renderInstagram();else if(v==='ytpage')renderYouTube();else if(v==='coverage')renderCoverage();else if(v==='expense')renderExpense();else if(v.indexOf('block:')===0)renderBlock(v.slice(6));else if(v.indexOf('dept:')===0){const a=v.split(':');renderDept(a[1],+a[2]);}else renderPod(v);injectAmbient(v);syncMobile();hydrateInsights();syncHash();}
+function render(){const lb=document.getElementById('loadbar');if(lb){lb.classList.remove('go');void lb.offsetWidth;lb.classList.add('go');}if(state.view!==lastView){state.tab='overview';state.igSel=null;state.ytSel=null;lastView=state.view;}destroyCharts();buildNav();const v=state.view;if(v==='overview')renderOverview();else if(v==='compare')renderCompare();else if(v==='fieldguide')renderFieldGuide();else if(v==='sheets')renderSheets();else if(v==='igpage')renderInstagram();else if(v==='ytpage')renderYouTube();else if(v==='coverage')renderCoverage();else if(v==='expense')renderExpense();else if(v==='salaries')renderSalaries();else if(v.indexOf('block:')===0)renderBlock(v.slice(6));else if(v.indexOf('dept:')===0){const a=v.split(':');renderDept(a[1],+a[2]);}else renderPod(v);injectAmbient(v);syncMobile();hydrateInsights();syncHash();}
 function currentHash(){
   let parts=[state.view];
   if(state.view==='igpage'&&state.igSel)parts.push(state.igSel);

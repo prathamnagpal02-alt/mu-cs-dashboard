@@ -14,7 +14,10 @@ Run:  venv/Scripts/python.exe cohesivity_sync.py          (data + AI)
       venv/Scripts/python.exe cohesivity_sync.py --no-ai  (data only, fast)
 """
 
+import base64
+import hashlib
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -24,6 +27,20 @@ from pathlib import Path
 import munim_api  # reuse build_data + prompts
 
 RANGES = [7, 30, 90]
+# PIN that unlocks the salary view. Used ONLY to encrypt; never deployed.
+SALARY_PIN = os.environ.get("MUNIM_SALARY_PIN", "4567")
+
+
+def encrypt_payload(payload, pin):
+    """AES-256-GCM with a PBKDF2-SHA256 key — decryptable by the browser's
+    Web Crypto API. The deployed file holds only ciphertext."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    salt, iv = os.urandom(16), os.urandom(12)
+    key = hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, 100000, 32)
+    ct = AESGCM(key).encrypt(iv, json.dumps(payload, default=str).encode(), None)
+    b64 = lambda b: base64.b64encode(b).decode()
+    return {"v": 1, "kdf": "PBKDF2-SHA256", "iter": 100000,
+            "salt": b64(salt), "iv": b64(iv), "ct": b64(ct)}
 BASE = "https://cohesivity.ai"
 UA = "munim-sync/1"
 NO_AI = "--no-ai" in sys.argv
@@ -163,6 +180,16 @@ def main():
         [0, json.dumps(exp, default=str), exp["generated_at"]])
     print(f"  upserted expense master: FY26 Rs {exp['fy_totals'].get('FY26',0):,} / "
           f"FY27 Rs {exp['fy_totals'].get('FY27',0):,}, {exp['line_count']} line items.")
+
+    # Salaries — encrypted with the PIN, stored under key -1 (only ciphertext leaves here)
+    print("  building + encrypting salaries...")
+    sal = munim_api.build_salaries()
+    enc = encrypt_payload(sal, SALARY_PIN)
+    sql("INSERT INTO munim_cache (days, payload, generated_at) VALUES ($1, $2, $3) "
+        "ON CONFLICT (days) DO UPDATE SET payload = EXCLUDED.payload, "
+        "generated_at = EXCLUDED.generated_at",
+        [-1, json.dumps(enc), sal["generated_at"]])
+    print(f"  upserted encrypted salaries ({sal['headcount']} people, PIN-locked).")
 
     print("\nDone. munim_cache populated on Cohesivity Postgres.")
 
