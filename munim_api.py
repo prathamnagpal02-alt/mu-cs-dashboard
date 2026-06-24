@@ -742,6 +742,227 @@ def build_social_pod(pod_id, start=None, today=None):
     return ops
 
 
+# ── Expense Master: unified FY26 + FY27 spend, normalized to line items ──────
+EXPENSE_FY26_SHEET_ID = "1fAOjd15uQyj1vLgCOuhzcSnN8pL73F_33xDIDZ0nVN0"
+EXPENSE_FY27_SHEET_ID = "1lRCXckgd4BPDK8R0Wbik17m_0s2l6OEhaLEDKSVv6rg"
+EXP_FY = {"FY26": EXPENSE_FY26_SHEET_ID, "FY27": EXPENSE_FY27_SHEET_ID}
+
+# canonical pod names so a pod rolls up across both FYs' different labels
+POD_CANON = [
+    ("builders", "Builders.mu"), ("student stor", "Builders.mu"),
+    ("coverage", "Coverage"), ("perf", "Performance Ads"),
+    ("series c", "Series C"), ("offcampus", "Offcampus"), ("off campus", "Offcampus"),
+    ("opm", "OPM"), ("bharat", "PGP Bharat"), ("masters of the market", "Masters of the Market"),
+    ("brand film", "Brand Films"), ("brand comm", "Brand"), ("brand", "Brand"),
+    ("socials - instagram", "Instagram"), ("instagram", "Instagram"),
+    ("socials youtube", "YouTube"), ("youtube", "YouTube"),
+    ("faculty", "Faculty Videos"), ("scratch", "Scratch"),
+    ("a la carte", "A la Carte"), ("offline event", "Offline Events"),
+    ("classroom", "Classroom"), ("nandini", "Nandini IP"), ("prospectus", "Prospectus"),
+]
+
+
+def canon_pod(raw):
+    s = str(raw or "").strip().lower()
+    if not s:
+        return "Unassigned"
+    for kw, name in POD_CANON:
+        if kw in s:
+            return name
+    return str(raw).strip()
+
+
+def _norm_status(s):
+    s = str(s or "").strip().lower()
+    if not s:
+        return "Unknown"
+    if "clear" in s or "paid" in s or "done" in s:
+        return "Cleared"
+    if "pending" in s or "review" in s or "process" in s or "hold" in s:
+        return "Pending"
+    return str(s).title()
+
+
+def _firstkey(r, cols):
+    for c in (cols if isinstance(cols, list) else [cols]):
+        v = str(r.get(c, "") or "").strip()
+        if v:
+            return v
+    return ""
+
+
+def _firstdate(r, cols):
+    for c in (cols if isinstance(cols, list) else [cols]):
+        d = parse_date_str(r.get(c))
+        if d:
+            return d
+    return None
+
+
+# category -> source tabs per FY + the columns to read
+EXP_CATS = [
+    {"cat": "Content", "tabs": {"FY26": "Content Expense", "FY27": "Content Expenses"},
+     "gst": "Amount with GST", "nogst": "Total (Without GST)",
+     "date": "Date of Incurring the Expense", "pod": "Pod",
+     "dept": ["Department", "Department = P&L"], "vendor": "Vendor Name",
+     "desc": "Description of Work", "status": ["Payment Status ", "Payment Status"],
+     "sub": {"Equipment": "Equipment", "Manpower": "Manpower", "TBL + Misc": "TBL + Misc",
+             "Props": "Props", "Production": "Production Expenses"}},
+    {"cat": "Influencer", "tabs": {"FY26": "Influencer Marketing", "FY27": "Influencer Marketing"},
+     "gst": "Amount with GST", "nogst": "Total (Without GST)",
+     "date": ["Date of Incurring the Expense = Date of Video going Live", "Date of Video going Live"],
+     "vendor": "Agency", "desc": "Particulars",
+     "dept": ["Department", "Department = P&L\n\n(Campaign executed for which department)", "CS - Vertical"],
+     "status": ["Payment Status ", "Payment Status"]},
+    {"cat": "Subscription", "tabs": {"FY26": "Subscription Purchase", "FY27": "Subscriptions"},
+     "gst": "Amount", "nogst": "Amount", "date": "Date of Incurring the Expense",
+     "pod": "Pod", "dept": ["Department", "Department = P&L"], "vendor": "Vendor Name",
+     "desc": "Description of Work", "status": ["Payment Status ", "Payment Status"]},
+    {"cat": "Asset", "tabs": {"FY26": "Asset Purchase", "FY27": "Asset Purchase"},
+     "gst": "Amount", "nogst": "Amount", "date": "Date of Incurring the Expense",
+     "pod": "Pod", "dept": ["Department", "Department = P&L"], "vendor": "Vendor Name",
+     "desc": "Description of Work", "status": ["Payment Status ", "Payment Status"]},
+    {"cat": "Reimbursement", "tabs": {"FY26": "Reimbursement", "FY27": "Reimbursement"},
+     "gst": "Amount", "nogst": "Amount",
+     "date": ["Date of Incurring\n the Expense", "Date of Incurring the Expense"],
+     "pod": "Pod", "dept": ["Department", "Department = P&L\n\n(Default Central Functions here)"],
+     "vendor": ["Vendor Name", "Employee Name"], "desc": "Description of Work",
+     "status": ["Payment Status", "Payment Status "]},
+    {"cat": "Retainer", "tabs": {"FY27": "Retainer"},   # FY26 retainer comes from Master Payments
+     "gst": "Amount (₹)", "nogst": "Amount (₹)", "date": "Date of Incurring the Expense",
+     "pod": "Pod", "dept": ["Department = P&L"], "vendor": "Vendor Name",
+     "desc": "Description of Work", "status": ["Payment Status ", "Payment Status"]},
+    {"cat": "One-Time", "tabs": {"FY26": "One Time Payments"},
+     "gst": "Amount (₹) (without GST)", "nogst": "Amount (₹) (without GST)",
+     "date": "Date of Incurring the Expense", "vendor": "Vendor Name",
+     "desc": "Description of Work", "status": ["Payment Status ", "Payment Status"]},
+]
+
+_MONTHS = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"]
+
+
+def _fy26_retainer_from_master():
+    """FY26 Retainer ledger tab is malformed; take the clean monthly Retainer
+    totals from FY26 Master Payments instead."""
+    out = []
+    rows = fetch_latest_rows("Master Payments", EXPENSE_FY26_SHEET_ID)
+    for r in rows:
+        mlabel = str(r.get("Month", "") or "").strip()
+        d = parse_date_str(mlabel) or parse_date_str("1 " + mlabel)
+        amt = _money(r.get("Retainer"))
+        if d and amt and "total" not in mlabel.lower():
+            out.append({"fy": "FY26", "cat": "Retainer", "date": d.isoformat(),
+                        "month": d.strftime("%Y-%m"), "pod": "Brand", "dept": "BRAND",
+                        "vendor": "Retainer partners", "desc": "Monthly retainer",
+                        "gst": round(amt), "nogst": round(amt), "status": "Cleared", "sub": None})
+    return out
+
+
+# plausible date window per FY (Apr 1 -> following Mar 31, with a little grace)
+FY_WINDOW = {"FY26": (date(2025, 4, 1), date(2026, 6, 30)),
+             "FY27": (date(2026, 4, 1), date(2027, 6, 30))}
+# Master Payments category columns -> clean labels (these are the OFFICIAL totals)
+MP_CATS = {
+    "Content Expenses\n(Total - A+B+C+D+E)": "Content", "Retainer": "Retainer",
+    "Asset Purchase": "Asset", "Subscription Purchase ": "Subscription",
+    "Influencer Marketing": "Influencer", "Infleuncer Marketing": "Influencer",
+    "Reimbursements": "Reimbursement",
+}
+MP_SUB = {"Equipment Rental (A)": "Equipment", "Manpower (B)": "Manpower",
+          "TBL + Misc (C)": "TBL + Misc", "Props (D)": "Props",
+          "Production Expenses (one time payments like production house & crew etc) - (E)": "Production"}
+
+
+def _master_payments(fy):
+    """Official monthly x category rollup from the Master Payments tab."""
+    rows = fetch_latest_rows("Master Payments", EXP_FY[fy])
+    out = []
+    for r in rows:
+        mlabel = str(r.get("Month", "") or "").strip()
+        if not mlabel or "total" in mlabel.lower():
+            continue
+        d = parse_date_str(mlabel) or parse_date_str("1 " + mlabel)
+        cats = {lab: round(_money(r.get(col))) for col, lab in MP_CATS.items() if _money(r.get(col))}
+        sub = {lab: round(_money(r.get(col))) for col, lab in MP_SUB.items() if _money(r.get(col))}
+        total = round(_money(r.get("Total")))
+        if total or cats:
+            out.append({"month_label": mlabel, "month": d.strftime("%Y-%m") if d else "",
+                        "cats": cats, "content_sub": sub, "total": total})
+    return out
+
+
+def _content_lines():
+    """Clean, pod-attributed line items from the Content Expenses ledger of both
+    FYs (one ledger per FY -> no double counting). The granular detail layer."""
+    cfg = EXP_CATS[0]  # Content
+    lo, hi = date(2024, 1, 1), date(2027, 12, 31)
+    lines = []
+    for fy, tab in cfg["tabs"].items():
+        for r in fetch_latest_rows(tab, EXP_FY[fy]):
+            g = _money(_firstkey(r, cfg["gst"]))
+            n = _money(_firstkey(r, cfg["nogst"]))
+            if g == 0 and n == 0:
+                continue
+            d = _firstdate(r, cfg["date"])
+            if d and not (lo <= d <= hi):
+                d = None
+            lines.append({
+                "fy": fy, "date": d.isoformat() if d else "",
+                "month": d.strftime("%Y-%m") if d else "",
+                "pod": canon_pod(_firstkey(r, cfg["pod"])),
+                "dept": _firstkey(r, cfg["dept"]) or "—",
+                "vendor": _firstkey(r, cfg["vendor"]) or "—",
+                "desc": _firstkey(r, cfg["desc"])[:90],
+                "gst": round(g or n), "nogst": round(n or g),
+                "status": _norm_status(_firstkey(r, cfg["status"])),
+                "sub": {k: round(_money(r.get(v))) for k, v in cfg["sub"].items()},
+            })
+    return lines
+
+
+def _ledger_master(fy):
+    """Fallback monthly x category rollup from the per-category ledgers, used
+    when an FY's Master Payments tab hasn't been filled in yet (e.g. FY27)."""
+    bym = {}
+    for cfg in EXP_CATS:
+        tab = cfg["tabs"].get(fy)
+        if not tab:
+            continue
+        for r in fetch_latest_rows(tab, EXP_FY[fy]):
+            amt = _money(_firstkey(r, cfg["gst"])) or _money(_firstkey(r, cfg["nogst"]))
+            d = _firstdate(r, cfg["date"])
+            if not amt or not d or not (FY_WINDOW[fy][0] <= d <= FY_WINDOW[fy][1]):
+                continue
+            mk = d.strftime("%Y-%m")
+            bym.setdefault(mk, {}).setdefault(cfg["cat"], 0.0)
+            bym[mk][cfg["cat"]] += amt
+    out = []
+    for mk in sorted(bym):
+        cats = {c: round(v) for c, v in bym[mk].items()}
+        out.append({"month": mk, "month_label": mk, "cats": cats,
+                    "content_sub": {}, "total": round(sum(cats.values()))})
+    return out
+
+
+def build_expense():
+    master = {}
+    master_source = {}
+    for fy in EXP_FY:
+        mp = _master_payments(fy)
+        if mp:
+            master[fy], master_source[fy] = mp, "Master Payments (official)"
+        else:
+            master[fy], master_source[fy] = _ledger_master(fy), "ledgers (Master Payments not yet filled)"
+    lines = _content_lines()
+    months = sorted({l["month"] for l in lines if l["month"]}
+                    | {m["month"] for fy in master for m in master[fy] if m["month"]})
+    fy_totals = {fy: sum(m["total"] for m in master[fy]) for fy in master}
+    return {"generated_at": datetime.now().isoformat(timespec="seconds"),
+            "fys": ["FY26", "FY27"], "months": months,
+            "master": master, "master_source": master_source, "fy_totals": fy_totals,
+            "lines": lines, "line_count": len(lines)}
+
+
 # ── the big tray: everything the dashboard needs in one fetch ───────────────
 _data_cache = {}      # days -> (timestamp, payload)
 DATA_TTL = 120        # seconds; sheets only refresh on snapshot anyway
@@ -1117,6 +1338,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "time": datetime.now().isoformat()})
             if path == "/api/data":
                 return self._send(200, build_data(days))
+            if path == "/api/expense":
+                return self._send(200, build_expense())
             if path == "/api/insights":
                 return self._send(200, insights_overall(build_data(days)))
             if path.startswith("/api/insights/pod/"):

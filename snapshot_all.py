@@ -41,6 +41,15 @@ AOP_SHEET_ID = "16tKPWj33VN1Y7PGRf1LqNyYHOw6gLIJErG3f6nfY5AU"
 NEWSLETTERS_SHEET_ID = "1HXFklF6_RJ3L_lSDe0AUr1xdxKQ-c9ngYvvUosyFI94"
 ORM_SHEET_ID = "1kBFoCe28vrkVqnaRyn3dqNxBs_KSZf8MuZcpVp_vAXE"
 INFLUENCER_SHEET_ID = "1RCMD8DHsIVBnwrIfl_2qgvt0LQZaUG2eoDFLwwuHano"
+# Dedicated CS Expense Master Trackers (per financial year)
+EXPENSE_FY26_SHEET_ID = "1fAOjd15uQyj1vLgCOuhzcSnN8pL73F_33xDIDZ0nVN0"
+EXPENSE_FY27_SHEET_ID = "1lRCXckgd4BPDK8R0Wbik17m_0s2l6OEhaLEDKSVv6rg"
+EXPENSE_FY26_TABS = ["Content Expense", "Master Payments", "Retainer",
+                     "Subscription Purchase", "Asset Purchase", "Reimbursement",
+                     "Influencer Marketing", "One Time Payments", "Amplification"]
+EXPENSE_FY27_TABS = ["Content Expenses", "Master Payments", "Retainer",
+                     "Subscriptions", "Asset Purchase", "Reimbursement",
+                     "Influencer Marketing", "Amplification"]
 PR_SHEET_ID = "1Tr4HPLouJsXRHtJDWBjsxKgLxX2StDI8Cb6f0Wyb2D0"
 
 SCOPES = [
@@ -275,6 +284,14 @@ def main():
         snapshot_supplementary_sheet(
             gc, INFLUENCER_SHEET_ID, "Influencer Marketing", INFLUENCER_TABS,
         )
+
+    # --- Expense Master Trackers (FY26 + FY27) ---
+    snapshot_supplementary_sheet(
+        gc, EXPENSE_FY26_SHEET_ID, "Expense Master FY26", EXPENSE_FY26_TABS,
+    )
+    snapshot_supplementary_sheet(
+        gc, EXPENSE_FY27_SHEET_ID, "Expense Master FY27", EXPENSE_FY27_TABS,
+    )
 
     elapsed = (datetime.now() - start).total_seconds()
     print(f"\nDone. Total elapsed: {elapsed:.1f}s")

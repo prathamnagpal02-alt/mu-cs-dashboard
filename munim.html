@@ -667,6 +667,13 @@ body{font-family:var(--sans);font-weight:400;color:var(--ink);background:var(--p
 .mbar-track{flex:1;height:9px;background:var(--line-soft);border-radius:5px;overflow:hidden}
 .mbar-fill{height:100%;background:var(--cyan);border-radius:5px}
 .mbar-v{font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--ink-2);width:64px;text-align:right;flex-shrink:0}
+.exp-controls{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+.exp-grp{display:inline-flex;background:var(--card);border:1px solid var(--line);border-radius:100px;padding:3px}
+.exp-tog{font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:.02em;color:var(--muted);background:transparent;border:0;padding:7px 16px;border-radius:100px;cursor:pointer;transition:.15s}
+.exp-tog.on{background:var(--ink);color:var(--paper)}
+.exp-note{font-family:var(--mono);font-size:9.5px;color:var(--muted-2);max-width:340px;line-height:1.5}
+.exp-search{margin-left:auto;font-family:var(--sans);font-size:12.5px;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:100px;padding:8px 15px;min-width:230px}
+.exp-search:focus{outline:none;border-color:var(--cyan)}
 </style>
 </head>
 <body>
@@ -1212,30 +1219,64 @@ function renderCoverage(){
   document.querySelectorAll('[data-go]').forEach(el=>el.onclick=()=>{state.view=el.dataset.go;render();window.scrollTo({top:0});});
 }
 
+let EXP=null;const expState={fy:'FY26',gst:true,q:''};
+function rupL(v){return v>=1e7?'₹'+(v/1e7).toFixed(2)+'Cr':v>=1e5?'₹'+(v/1e5).toFixed(1)+'L':v>=1e3?'₹'+(v/1e3).toFixed(0)+'K':'₹'+Math.round(v);}
 function renderExpense(){
   document.getElementById('crumbs').innerHTML='Studio &nbsp;›&nbsp; <b>Expense Master</b>';
-  const total=EXP_DEPT.reduce((a,b)=>a+b[1],0);const aop=12500000;const surplus=aop-total;
-  const dept=applyPal(EXP_DEPT);const deptTotal=dept.reduce((a,b)=>a+b[1],0);
-  const fmtCr=v=>'₹'+(v/10000000).toFixed(2)+' Cr';const fmtL=v=>'₹'+(v/100000).toFixed(1)+'L';
+  if(!EXP){
+    document.getElementById('content').innerHTML=`<div class="hero"><h1>Expense <span class="hl">Master.</span></h1><div class="h-sub">Loading FY26 + FY27 spend…</div></div>`;
+    fetch('data/expense.json?v='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{EXP=d;if(state.view==='expense')renderExpense();}).catch(e=>{document.getElementById('content').innerHTML=`<div class="empty"><h3>Could not load expenses</h3><p>${e}</p></div>`;});
+    return;
+  }
+  const fy=expState.fy,basis=expState.gst?'gst':'nogst';
+  const mrows=(EXP.master[fy]||[]);
+  const catTot={};let total=0;mrows.forEach(m=>{for(const c in m.cats)catTot[c]=(catTot[c]||0)+m.cats[c];total+=m.total;});
+  const catArr=applyPal(Object.entries(catTot).sort((a,b)=>b[1]-a[1]));const catSum=catArr.reduce((a,b)=>a+b[1],0)||1;
+  const monthArr=mrows.filter(m=>m.month).map(m=>[m.month_label||m.month,m.total]);
+  const lines=EXP.lines.filter(l=>l.fy===fy);
+  const podTot={};lines.forEach(l=>{podTot[l.pod]=(podTot[l.pod]||0)+l[basis];});
+  const podArr=Object.entries(podTot).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  const subTot={};mrows.forEach(m=>{for(const k in(m.content_sub||{}))subTot[k]=(subTot[k]||0)+m.content_sub[k];});
+  if(!Object.keys(subTot).length)lines.forEach(l=>{for(const k in(l.sub||{}))subTot[k]=(subTot[k]||0)+(l.sub[k]||0);});
+  const subArr=Object.entries(subTot).sort((a,b)=>b[1]-a[1]);const subMax=Math.max(1,...subArr.map(s=>s[1]));
+  const other=fy==='FY26'?'FY27':'FY26';
+  const biggestCat=catArr[0]?catArr[0][0]:'—';
+  // line-item table (filtered + sorted by amount)
+  const q=(expState.q||'').toLowerCase();
+  const tlines=lines.filter(l=>!q||(l.vendor+' '+l.desc+' '+l.pod+' '+l.dept).toLowerCase().includes(q)).sort((a,b)=>b[basis]-a[basis]).slice(0,80);
+  const src=EXP.master_source?EXP.master_source[fy]:'';
+  const fyBtn=(f)=>`<button class="exp-tog${expState.fy===f?' on':''}" data-expfy="${f}">${f}</button>`;
   document.getElementById('content').innerHTML=`
-   <div class="hero"><h1>Expense <span class="hl">Master.</span></h1><div class="h-sub">Where every rupee went · pod, channel and department · window <b>${state.range}</b></div></div>
-   <div class="lockbanner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><div>Finance view. In the live build this whole page is visible only to <b>Divyam Goenka</b> and <b>Pratham Nagpal</b>. Everyone else sees output, not spend.</div></div>
-   <div class="munim"><span class="munim-tag">MU<span class="nm">नीम</span></span><div class="munim-body"><p>This is where Munim shines. <b>${fmtL(total)}</b> spent against a <b>${fmtL(aop)}</b> plan, so you are <b>${fmtL(surplus)}</b> under for now. Performance Ads and Brand Films are the two big mouths to feed.</p><p class="munim-sg"><span class="sg-tag">Munim suggests</span>Watch Brand Films' cost per finished minute. It is the line that quietly runs away.</p></div></div>
+   <div class="hero"><h1>Expense <span class="hl">Master.</span></h1><div class="h-sub">Every rupee across FY26 &amp; FY27 · ${EXP.line_count} content line items · source: ${src}</div></div>
+   <div class="exp-controls">
+     <div class="exp-grp">${fyBtn('FY26')}${fyBtn('FY27')}</div>
+     <div class="exp-grp"><button class="exp-tog${expState.gst?' on':''}" data-expgst="1">Incl. GST</button><button class="exp-tog${!expState.gst?' on':''}" data-expgst="0">Excl. GST</button></div>
+     <span class="exp-note">GST toggle applies to pod &amp; line-item detail (Content ledger). Category/month totals are the official rollup.</span>
+   </div>
    <div class="kpi-row">
-     <div class="kpi"><div class="lbl">Total spend ${LOCKSPAN}</div><div class="val">${fmtL(total)}</div><div class="ul"></div><div class="delta flat">this window</div></div>
-     <div class="kpi k"><div class="lbl">Against AOP ${LOCKSPAN}</div><div class="val">${Math.round(total/aop*100)}%</div><div class="ul"></div><div class="delta flat">of ${fmtL(aop)} plan</div></div>
-     <div class="kpi o"><div class="lbl">Surplus left ${LOCKSPAN}</div><div class="val">${fmtL(surplus)}</div><div class="ul"></div><div class="delta flat">unspent</div></div>
-     <div class="kpi y"><div class="lbl">Biggest line ${LOCKSPAN}</div><div class="val">${fmtL(EXP_PODS[0][1])}</div><div class="ul"></div><div class="delta flat">${EXP_PODS[0][0]}</div></div>
+     <div class="kpi"><div class="lbl">${fy} total spend</div><div class="val">${rupL(EXP.fy_totals[fy]||total)}</div><div class="ul"></div><div class="delta flat">${mrows.length} months</div></div>
+     <div class="kpi k"><div class="lbl">${other} total</div><div class="val">${rupL(EXP.fy_totals[other]||0)}</div><div class="ul"></div><div class="delta flat">compare</div></div>
+     <div class="kpi o"><div class="lbl">Biggest category</div><div class="val" style="font-size:30px">${biggestCat}</div><div class="ul"></div><div class="delta flat">${rupL(catArr[0]?catArr[0][1]:0)}</div></div>
+     <div class="kpi y"><div class="lbl">Content (pod-tagged)</div><div class="val">${rupL(lines.reduce((a,l)=>a+l[basis],0))}</div><div class="ul"></div><div class="delta flat">${lines.length} lines</div></div>
    </div>
    <div class="panel-row two">
-     <div class="panel"><div class="panel-head"><div><div class="panel-title">Pod-wise spend</div><div class="panel-sub">Who is spending what</div></div><span class="panel-tag">Pods</span></div><div class="chart-wrap" style="height:300px"><canvas id="expPod"></canvas></div></div>
-     <div class="panel"><div class="panel-head"><div><div class="panel-title">By sub-department</div><div class="panel-sub">Digital · Offline Events · New Initiatives</div></div></div><div class="donut-wrap"><canvas id="expDept"></canvas><div class="donut-center"><div class="big">${fmtCr(deptTotal)}</div><div class="small">Total</div></div></div>${legendHtml(dept,deptTotal)}</div>
+     <div class="panel"><div class="panel-head"><div><div class="panel-title">Spend by category</div><div class="panel-sub">${fy} · official rollup</div></div><span class="panel-tag">${rupL(catSum)}</span></div><div class="donut-wrap"><canvas id="expCat"></canvas><div class="donut-center"><div class="big">${rupL(catSum)}</div><div class="small">${fy}</div></div></div>${legendHtml(catArr,catSum)}</div>
+     <div class="panel"><div class="panel-head"><div><div class="panel-title">Spend by month</div><div class="panel-sub">${fy} · total per month</div></div><span class="panel-tag">Trend</span></div><div class="chart-wrap"><canvas id="expMonth"></canvas></div></div>
    </div>
-   <div class="panel-row full"><div class="panel"><span class="ghost">₹</span><div class="panel-head"><div><div class="panel-title">Channel-wise spend</div><div class="panel-sub">Where the money is published</div></div><span class="panel-tag">Channels</span></div>
-     <table class="tbl"><thead><tr><th>Channel</th><th>Spend</th><th>Share</th></tr></thead><tbody>${EXP_CH.slice().sort((a,b)=>b[1]-a[1]).map(c=>`<tr><td class="name">${c[0]}</td><td class="num">${fmtL(c[1])}</td><td class="num">${Math.round(c[1]/EXP_CH.reduce((a,b)=>a+b[1],0)*100)}%</td></tr>`).join('')}</tbody></table>
-     <p class="note">Placeholder figures. In the live build every number here is pulled from the Budget &amp; AOP sheet and is visible only to finance.</p></div></div>`;
-  charts.push(new Chart(document.getElementById('expPod').getContext('2d'),{type:'bar',data:{labels:EXP_PODS.map(p=>p[0]),datasets:[{data:EXP_PODS.map(p=>p[1]),backgroundColor:EXP_PODS.map((_,i)=>i===0?C.orange:C.cyan),borderRadius:6,maxBarThickness:22}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{backgroundColor:'#161512',padding:11,bodyFont:{family:'Montserrat',size:13,weight:'800'},displayColors:false,callbacks:{label:c=>fmtL(c.parsed.x)}}},scales:{x:{grid:{color:'#E7E1D2'},border:{display:false},ticks:{font:{family:'Montserrat',size:9},color:'#ABA593',callback:v=>fmtL(v)}},y:{grid:{display:false},border:{display:false},ticks:{font:{family:'Montserrat',size:10,weight:'600'},color:'#3A372F'}}}}}));
-  charts.push(donutChart(document.getElementById('expDept').getContext('2d'),dept));
+   <div class="panel-row two">
+     <div class="panel"><div class="panel-head"><div><div class="panel-title">Content spend by pod</div><div class="panel-sub">${fy} · ${expState.gst?'incl.':'excl.'} GST · unified pod names</div></div><span class="panel-tag">Top ${podArr.length}</span></div><div class="chart-wrap" style="height:${Math.max(220,podArr.length*26)}px"><canvas id="expPod"></canvas></div></div>
+     <div class="panel"><div class="panel-head"><div><div class="panel-title">Content production breakdown</div><div class="panel-sub">Equipment · Manpower · Props · Production</div></div><span class="panel-tag">Drill-down</span></div>
+       <div class="mbars" style="margin-top:6px">${subArr.map(s=>`<div class="mbar"><div class="mbar-k" style="width:84px">${s[0]}</div><div class="mbar-track"><div class="mbar-fill" style="width:${Math.round(s[1]/subMax*100)}%"></div></div><div class="mbar-v">${rupL(s[1])}</div></div>`).join('')||'<p class="note">No sub-breakdown for this year.</p>'}</div></div>
+   </div>
+   <div class="panel-row full"><div class="panel"><span class="ghost">₹</span><div class="panel-head"><div><div class="panel-title">Line items</div><div class="panel-sub">${fy} content ledger · every expense, top 80 by amount</div></div><input class="exp-search" id="expSearch" placeholder="Search vendor, pod, description…" value="${(expState.q||'').replace(/"/g,'&quot;')}"></div>
+     <table class="tbl"><thead><tr><th>Vendor</th><th>Description</th><th>Pod</th><th>Dept</th><th>Date</th><th>Amount</th><th>Status</th></tr></thead><tbody>${tlines.map(l=>`<tr><td class="name">${(l.vendor||'—')}</td><td>${(l.desc||'').replace(/</g,'&lt;')}</td><td>${l.pod}</td><td>${l.dept}</td><td class="num">${l.date||'—'}</td><td class="num">${rupL(l[basis])}</td><td><span class="status-pill ${l.status==='Cleared'?'live':l.status==='Pending'?'build':''}" style="font-size:9px">${l.status}</span></td></tr>`).join('')}</tbody></table>
+     <p class="note">Showing ${tlines.length} of ${lines.length} ${fy} content line items. ${other} Master Payments ${EXP.fy_totals[other]?'':'not yet filled — '}aggregated from ledgers where needed.</p></div></div>`;
+  charts.push(donutChart(document.getElementById('expCat').getContext('2d'),catArr));
+  charts.push(barChart(document.getElementById('expMonth').getContext('2d'),monthArr.map(m=>m[0].slice(0,3)+(m[0].match(/20(\d2)/)?'':'')),monthArr.map(m=>m[1]),C.cyan));
+  charts.push(new Chart(document.getElementById('expPod').getContext('2d'),{type:'bar',data:{labels:podArr.map(p=>p[0]),datasets:[{data:podArr.map(p=>p[1]),backgroundColor:podArr.map((_,i)=>i===0?C.orange:C.cyan),borderRadius:6,maxBarThickness:20}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{backgroundColor:'#161512',padding:11,bodyFont:{family:'Montserrat',size:13,weight:'800'},displayColors:false,callbacks:{label:c=>rupL(c.parsed.x)}}},scales:{x:{grid:{color:'#E7E1D2'},border:{display:false},ticks:{font:{family:'Montserrat',size:9},color:'#ABA593',callback:v=>rupL(v)}},y:{grid:{display:false},border:{display:false},ticks:{font:{family:'Montserrat',size:10,weight:'600'},color:'#3A372F'}}}}}));
+  document.querySelectorAll('[data-expfy]').forEach(el=>el.onclick=()=>{expState.fy=el.dataset.expfy;render();});
+  document.querySelectorAll('[data-expgst]').forEach(el=>el.onclick=()=>{expState.gst=el.dataset.expgst==='1';render();});
+  const se=document.getElementById('expSearch');if(se)se.oninput=()=>{expState.q=se.value;const tb=se.closest('.panel').querySelector('tbody');const ql=se.value.toLowerCase();const fl=lines.filter(l=>!ql||(l.vendor+' '+l.desc+' '+l.pod+' '+l.dept).toLowerCase().includes(ql)).sort((a,b)=>b[basis]-a[basis]).slice(0,80);tb.innerHTML=fl.map(l=>`<tr><td class="name">${l.vendor||'—'}</td><td>${(l.desc||'').replace(/</g,'&lt;')}</td><td>${l.pod}</td><td>${l.dept}</td><td class="num">${l.date||'—'}</td><td class="num">${rupL(l[basis])}</td><td><span class="status-pill ${l.status==='Cleared'?'live':l.status==='Pending'?'build':''}" style="font-size:9px">${l.status}</span></td></tr>`).join('');};
   document.querySelectorAll('[data-go]').forEach(el=>el.onclick=()=>{state.view=el.dataset.go;render();window.scrollTo({top:0});});
 }
 

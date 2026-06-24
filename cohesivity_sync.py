@@ -154,6 +154,16 @@ def main():
             [days, json.dumps(tray, default=str), tray["generated_at"]])
         print(f"  upserted window {days}d into Cohesivity.")
 
+    # Expense Master — window-independent, stored under key 0
+    print("  building expense master (FY26 + FY27)...")
+    exp = munim_api.build_expense()
+    sql("INSERT INTO munim_cache (days, payload, generated_at) VALUES ($1, $2, $3) "
+        "ON CONFLICT (days) DO UPDATE SET payload = EXCLUDED.payload, "
+        "generated_at = EXCLUDED.generated_at",
+        [0, json.dumps(exp, default=str), exp["generated_at"]])
+    print(f"  upserted expense master: FY26 Rs {exp['fy_totals'].get('FY26',0):,} / "
+          f"FY27 Rs {exp['fy_totals'].get('FY27',0):,}, {exp['line_count']} line items.")
+
     print("\nDone. munim_cache populated on Cohesivity Postgres.")
 
 

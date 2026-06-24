@@ -58,6 +58,14 @@ def main():
                       "data": json.dumps(tray, ensure_ascii=False), "encoding": "utf-8"})
         print(f"  bundled data/{days}.json")
 
+    # Expense Master (window-independent, key 0) -> data/expense.json
+    try:
+        files.append({"file": "data/expense.json",
+                      "data": json.dumps(fetch_tray(0), ensure_ascii=False), "encoding": "utf-8"})
+        print("  bundled data/expense.json")
+    except Exception as e:
+        print(f"  (skipped expense.json: {e})")
+
     print("Deploying to Cohesivity hosting (static)...")
     resp = _post(f"{BASE}/api/vercel/deploy?wait=ready",
                  {"files": files}, auth=C["coh_management_key"])
