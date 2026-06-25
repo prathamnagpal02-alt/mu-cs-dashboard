@@ -1,0 +1,59 @@
+name: MUnim Cloud Refresh
+
+# Keeps the dashboard's SHEET data live, in the cloud, 24/7 — independent of any
+# laptop. Pulls Google Sheets -> Supabase -> rebuilds -> redeploys to Cohesivity.
+# NO Apify (Instagram) and NO AI regeneration here: those stay manual (cost).
+on:
+  schedule:
+    - cron: '0 * * * *'        # hourly, on the hour (UTC)
+  workflow_dispatch: {}         # lets you trigger a run manually from the Actions tab
+
+concurrency:
+  group: munim-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check out the live code
+        uses: actions/checkout@v4
+        with:
+          ref: munimji-live-backup
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install gspread google-auth google-auth-oauthlib psycopg2-binary python-dotenv cryptography
+
+      - name: Recreate secrets (from GitHub repo secrets, never committed)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          COH_TENANT_ID: ${{ secrets.COH_TENANT_ID }}
+          COH_MANAGEMENT_KEY: ${{ secrets.COH_MANAGEMENT_KEY }}
+          COH_APPLICATION_KEY: ${{ secrets.COH_APPLICATION_KEY }}
+        run: |
+          mkdir -p credentials
+          printf '%s' "$GOOGLE_CREDENTIALS_JSON" > credentials/service-account.json
+          {
+            echo "DATABASE_URL=$DATABASE_URL"
+            echo "GOOGLE_SHEET_ID=$GOOGLE_SHEET_ID"
+            echo "GOOGLE_CREDENTIALS_PATH=credentials/service-account.json"
+          } > .env
+          {
+            echo "tenant_id=$COH_TENANT_ID"
+            echo "coh_management_key=$COH_MANAGEMENT_KEY"
+            echo "coh_application_key=$COH_APPLICATION_KEY"
+          } > .cohesivity
+
+      - name: Snapshot sheets -> rebuild -> deploy
+        run: |
+          python -u snapshot_all.py
+          python -u cohesivity_sync.py --no-ai
+          python -u cohesivity_deploy.py
