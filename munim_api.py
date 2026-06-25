@@ -676,7 +676,7 @@ def build_cpv(pod_id, insta, start=None, today=None):
     canon = POD_EXPENSE_CANON.get(pod_id)
     if not canon:
         return None
-    exp_all = content_pod_expense(canon)
+    exp_all = pod_expense(canon)
     views_all = insta.get("total_views_alltime") or 0
     cpv = exp_all["total_gst"] / views_all if views_all else None
     # per-month CPV: spend that month ÷ views of reels posted that month
@@ -762,6 +762,7 @@ EXP_FY = {"FY26": EXPENSE_FY26_SHEET_ID, "FY27": EXPENSE_FY27_SHEET_ID}
 # canonical pod names so a pod rolls up across both FYs' different labels
 POD_CANON = [
     ("builders", "Builders.mu"), ("student stor", "Builders.mu"),
+    ("built", "Built at MU"), ("intern", "India's Intern"),
     ("coverage", "Coverage"), ("perf", "Performance Ads"),
     ("series c", "Series C"), ("offcampus", "Offcampus"), ("off campus", "Offcampus"),
     ("opm", "OPM"), ("bharat", "PGP Bharat"), ("masters of the market", "Masters of the Market"),
@@ -772,6 +773,14 @@ POD_CANON = [
     ("a la carte", "A la Carte"), ("offline event", "Offline Events"),
     ("classroom", "Classroom"), ("nandini", "Nandini IP"), ("prospectus", "Prospectus"),
 ]
+
+
+def canon_from_desc(desc):
+    s = str(desc or "").lower()
+    for kw, name in POD_CANON:
+        if kw in s:
+            return name
+    return "Unassigned"
 
 
 def canon_pod(raw):
@@ -903,33 +912,86 @@ def _master_payments(fy):
     return out
 
 
-def _content_lines():
-    """Clean, pod-attributed line items from the Content Expenses ledger of both
-    FYs (one ledger per FY -> no double counting). The granular detail layer."""
-    cfg = EXP_CATS[0]  # Content
-    lo, hi = date(2024, 1, 1), date(2027, 12, 31)
+# A pod's true cost = Content + Retainer + Reimbursement (+ Salary, provisioned).
+# Each source is pod-attributed where the sheet allows; FY26 reimbursements have
+# no Pod column so we match the pod from the description text.
+POD_EXP_SOURCES = [
+    {"source": "Content", "tabs": {"FY26": "Content Expense", "FY27": "Content Expenses"},
+     "gst": "Amount with GST", "nogst": "Total (Without GST)", "date": "Date of Incurring the Expense",
+     "pod": "Pod", "dept": ["Department", "Department = P&L"], "vertical": ["CS - Vertical"],
+     "vendor": "Vendor Name", "desc": "Description of Work", "status": ["Payment Status ", "Payment Status"],
+     "sub": {"Equipment": "Equipment", "Manpower": "Manpower", "TBL + Misc": "TBL + Misc",
+             "Props": "Props", "Production": "Production Expenses"}},
+    {"source": "Retainer", "tabs": {"FY27": "Retainer"},   # FY26 retainers -> Brand, from Master Payments
+     "gst": "Amount (₹)", "nogst": "Amount (₹)", "date": "Date of Incurring the Expense",
+     "pod": "Pod", "dept": ["Department = P&L"], "vertical": ["CS - Vertical"],
+     "vendor": "Vendor Name", "desc": "Description of Work", "status": ["Payment Status "]},
+    {"source": "Reimbursement", "tabs": {"FY27": "Reimbursement", "FY26": "Reimbursement"},
+     "gst": "Amount", "nogst": "Amount",
+     "date": ["Date of Incurring\n the Expense", "Date of Incurring the Expense"],
+     "pod": ["Pod\n\n(Pod name for the employee)", "Pod"],
+     "dept": ["Department = P&L\n\n(Default Central Functions here)", "Department"],
+     "vertical": ["CS - Vertical\n\n(What vertical does the employee work in)", "CS - Vertical"],
+     "vendor": ["Vendor Name", "Employee Name"], "desc": "Description of Work",
+     "status": ["Payment Status", "Payment Status "], "pod_from_desc": True},
+]
+
+# Provision for salaries-as-pod-cost. The Pod-Wise Salary tab already maps pod->
+# monthly; flip this on (and supply the canonical mapping) once the user uploads
+# the per-pod salary details they mentioned.
+INCLUDE_SALARY_IN_POD = False
+
+
+def _pod_expense_lines():
     lines = []
-    for fy, tab in cfg["tabs"].items():
-        for r in fetch_latest_rows(tab, EXP_FY[fy]):
-            g = _money(_firstkey(r, cfg["gst"]))
-            n = _money(_firstkey(r, cfg["nogst"]))
-            if g == 0 and n == 0:
-                continue
-            d = _firstdate(r, cfg["date"])
-            if d and not (lo <= d <= hi):
-                d = None
-            lines.append({
-                "fy": fy, "date": d.isoformat() if d else "",
-                "month": d.strftime("%Y-%m") if d else "",
-                "pod": canon_pod(_firstkey(r, cfg["pod"])),
-                "dept": _firstkey(r, cfg["dept"]) or "—",
-                "vendor": _firstkey(r, cfg["vendor"]) or "—",
-                "desc": _firstkey(r, cfg["desc"])[:90],
-                "gst": round(g or n), "nogst": round(n or g),
-                "status": _norm_status(_firstkey(r, cfg["status"])),
-                "sub": {k: round(_money(r.get(v))) for k, v in cfg["sub"].items()},
-            })
+    for cfg in POD_EXP_SOURCES:
+        for fy, tab in cfg["tabs"].items():
+            lo, hi = FY_WINDOW[fy]
+            for r in fetch_latest_rows(tab, EXP_FY[fy]):
+                g = _money(_firstkey(r, cfg["gst"]))
+                n = _money(_firstkey(r, cfg["nogst"]))
+                if g == 0 and n == 0:
+                    continue
+                d = _firstdate(r, cfg["date"])
+                if d and not (date(2024, 1, 1) <= d <= hi):
+                    d = None
+                podraw = _firstkey(r, cfg.get("pod", []))
+                if podraw:
+                    pod = canon_pod(podraw)
+                elif cfg.get("pod_from_desc"):
+                    pod = canon_from_desc(_firstkey(r, cfg.get("desc", "")))
+                else:
+                    pod = "Unassigned"
+                lines.append({
+                    "fy": fy, "source": cfg["source"],
+                    "date": d.isoformat() if d else "", "month": d.strftime("%Y-%m") if d else "",
+                    "pod": pod, "vertical": _firstkey(r, cfg.get("vertical", [])) or "—",
+                    "dept": _firstkey(r, cfg.get("dept", [])) or "—",
+                    "vendor": _firstkey(r, cfg.get("vendor", [])) or "—",
+                    "desc": _firstkey(r, cfg.get("desc", ""))[:90],
+                    "gst": round(g or n), "nogst": round(n or g),
+                    "status": _norm_status(_firstkey(r, cfg.get("status", []))),
+                    "sub": ({k: round(_money(r.get(v))) for k, v in cfg["sub"].items()} if cfg.get("sub") else None),
+                })
+    # FY26 retainers (ledger tab is malformed) -> attribute to Brand from Master Payments
+    for r in fetch_latest_rows("Master Payments", EXPENSE_FY26_SHEET_ID):
+        mlabel = str(r.get("Month", "") or "").strip()
+        if not mlabel or "total" in mlabel.lower():
+            continue
+        d = parse_date_str(mlabel) or parse_date_str("1 " + mlabel)
+        amt = _money(r.get("Retainer"))
+        if d and amt:
+            lines.append({"fy": "FY26", "source": "Retainer", "date": d.isoformat(),
+                          "month": d.strftime("%Y-%m"), "pod": "Brand", "vertical": "Digital",
+                          "dept": "BRAND", "vendor": "Retainer partners", "desc": "Monthly retainer (FY26)",
+                          "gst": round(amt), "nogst": round(amt), "status": "Cleared", "sub": None})
+    if INCLUDE_SALARY_IN_POD:
+        lines += _salary_pod_lines()
     return lines
+
+
+def _salary_pod_lines():
+    return []   # provision — populate once per-pod salary mapping is uploaded
 
 
 def _ledger_master(fy):
@@ -959,35 +1021,37 @@ def _ledger_master(fy):
 _clines = {}   # ts -> lines
 
 
-def content_lines_cached():
+def pod_lines_cached():
     hit = _clines.get("v")
     if hit and time.time() - hit[0] < 180:
         return hit[1]
-    lines = _content_lines()
+    lines = _pod_expense_lines()
     _clines["v"] = (time.time(), lines)
     return lines
 
 
-def content_pod_expense(canon, start=None, today=None):
-    """One pod's Content-Expenses spend (from the FY26/FY27 Expense Master),
-    optionally windowed by date. Used by CPV and the per-pod expense panels."""
-    lines = [l for l in content_lines_cached() if l["pod"] == canon]
+def pod_expense(canon, start=None, today=None):
+    """One pod's all-in spend = Content + Retainer + Reimbursement (+ Salary when
+    enabled), from the FY26/FY27 Expense Master. Optionally windowed by date."""
+    lines = [l for l in pod_lines_cached() if l["pod"] == canon]
     if start and today:
         lines = [l for l in lines
                  if parse_date_str(l["date"]) and start <= parse_date_str(l["date"]) <= today]
-    bym, vend = {}, {}
+    bym, vend, bysrc = {}, {}, {}
     for l in lines:
         if l["month"]:
             bym[l["month"]] = bym.get(l["month"], 0) + l["gst"]
         vend[l["vendor"]] = vend.get(l["vendor"], 0) + l["gst"]
+        bysrc[l["source"]] = bysrc.get(l["source"], 0) + l["gst"]
     return {
         "total_gst": round(sum(l["gst"] for l in lines)),
         "total_nogst": round(sum(l["nogst"] for l in lines)),
         "count": len(lines),
+        "by_source": [{"source": s, "amount": round(v)} for s, v in sorted(bysrc.items(), key=lambda x: -x[1])],
         "by_month": [{"month": m, "amount": round(bym[m])} for m in sorted(bym)],
         "top_vendors": sorted(({"vendor": k, "amount": round(v)} for k, v in vend.items()),
                               key=lambda x: -x["amount"])[:6],
-        "lines": sorted(lines, key=lambda l: l["date"] or "", reverse=True)[:10],
+        "lines": sorted(lines, key=lambda l: l["date"] or "", reverse=True)[:12],
     }
 
 
@@ -1038,13 +1102,25 @@ def build_expense():
             master[fy], master_source[fy] = mp, "Master Payments (official)"
         else:
             master[fy], master_source[fy] = _ledger_master(fy), "ledgers (Master Payments not yet filled)"
-    lines = _content_lines()
+    lines = pod_lines_cached()
     months = sorted({l["month"] for l in lines if l["month"]}
                     | {m["month"] for fy in master for m in master[fy] if m["month"]})
     fy_totals = {fy: sum(m["total"] for m in master[fy]) for fy in master}
+    # pod-attributed rollups (Content + Retainer + Reimbursement), per FY
+    def rollup(key, fy):
+        agg = {}
+        for l in lines:
+            if l["fy"] != fy:
+                continue
+            agg[l[key] or "—"] = agg.get(l[key] or "—", 0) + l["gst"]
+        return sorted(({key: k, "amount": round(v)} for k, v in agg.items()), key=lambda x: -x["amount"])
+    by_vertical = {fy: rollup("vertical", fy) for fy in EXP_FY}
+    by_source = {fy: rollup("source", fy) for fy in EXP_FY}
+    pod_totals = {fy: [r for r in rollup("pod", fy) if r["pod"] != "Unassigned"] for fy in EXP_FY}
     return {"generated_at": datetime.now().isoformat(timespec="seconds"),
             "fys": ["FY26", "FY27"], "months": months,
             "master": master, "master_source": master_source, "fy_totals": fy_totals,
+            "by_vertical": by_vertical, "by_source": by_source, "pod_totals": pod_totals,
             "lines": lines, "line_count": len(lines)}
 
 
@@ -1108,7 +1184,7 @@ def _build_data_inner(days):
                 ops["cpv"] = build_cpv(mid, insta, start, today)
         # per-pod spend from the Expense Master (shows on the pod's own page)
         if mid and mid in POD_EXPENSE_CANON:
-            pe = content_pod_expense(POD_EXPENSE_CANON[mid])
+            pe = pod_expense(POD_EXPENSE_CANON[mid])
             if pe["count"]:
                 ops["pod_expense"] = pe
         if ops["munim_id"]:
